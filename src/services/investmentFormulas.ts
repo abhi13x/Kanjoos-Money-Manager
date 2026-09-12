@@ -38,19 +38,26 @@ const createResult = (
   const roundedMaturity = roundCents(maturityValueCents);
   const roundedInvested = roundCents(totalInvestedCents);
   return {
-    maturityValueCents: roundedMaturity,
-    totalInvestedCents: roundedInvested,
+    maturityValueCents: Math.max(0, roundedMaturity),
+    totalInvestedCents: Math.max(0, roundedInvested),
     interestEarnedCents: roundedMaturity - roundedInvested,
     tenureMonths: Math.max(0, tenureMonths),
   };
 };
 
-/** Months elapsed between two timestamps. */
+/** Months elapsed between two timestamps, accounting for partial day-of-month offsets. */
 export const getElapsedMonths = (startDate: number, asOf: number = Date.now()): number => {
-  if (!startDate || isNaN(startDate)) return 0;
+  if (!startDate || !Number.isFinite(startDate) || !Number.isFinite(asOf)) return 0;
   const start = new Date(startDate);
   const end = new Date(asOf);
-  const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return 0;
+
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) {
+    months -= 1; // Haven't completed full month yet
+  }
+
   return Math.max(0, months);
 };
 
@@ -70,7 +77,7 @@ export const calculateFD = (params: {
   }
 
   const n = PERIODS_PER_YEAR[params.compoundingFrequency ?? 'quarterly'];
-  const r = annualRatePercent / 100;
+  const r = Math.max(0, annualRatePercent) / 100;
   const t = tenureMonths / 12;
 
   const maturityValueCents = principalCents * Math.pow(1 + r / n, n * t);
@@ -80,7 +87,6 @@ export const calculateFD = (params: {
 /**
  * Recurring Deposit — RBI standard quarterly-compounding formula.
  * M = P × [((1 + R/400)^(n/3) − 1) / (1 − (1 + R/400)^(−1/3))]
- * where n = tenure in months (n/3 = total quarters)
  */
 export const calculateRD = (params: {
   monthlyDepositCents: number;
@@ -90,7 +96,7 @@ export const calculateRD = (params: {
   const { monthlyDepositCents: P, annualRatePercent: R, tenureMonths: n } = params;
 
   if (n <= 0 || P <= 0) {
-    return createResult(0, 0, n);
+    return createResult(P * Math.max(0, n), P * Math.max(0, n), n);
   }
 
   const totalInvestedCents = P * n;
@@ -100,7 +106,7 @@ export const calculateRD = (params: {
   }
 
   const quarterlyBase = 1 + R / 400;
-  const totalQuarters = n / 3; // Fixed: divide by 3 instead of 4 * n
+  const totalQuarters = n / 3;
   const numerator = Math.pow(quarterlyBase, totalQuarters) - 1;
   const denominator = 1 - Math.pow(quarterlyBase, -1 / 3);
 
@@ -172,7 +178,7 @@ export const calculateLumpSum = (params: {
 };
 
 /**
- * PPF — monthly deposits with monthly interest accrual and annual interest credit.
+ * PPF — monthly deposits with monthly interest accrual and annual interest credit (March 31st).
  */
 export const calculatePPF = (params: {
   monthlyDepositCents: number;
@@ -187,7 +193,7 @@ export const calculatePPF = (params: {
 
   let balance = existingBalanceCents;
   let accruedInterestInYear = 0;
-  const monthlyRate = annualRatePercent / 12 / 100;
+  const monthlyRate = Math.max(0, annualRatePercent) / 12 / 100;
 
   for (let month = 1; month <= tenureMonths; month++) {
     balance += monthlyDepositCents;
@@ -223,7 +229,7 @@ export const calculateEPFO = (params: {
     existingBalanceCents: params.existingBalanceCents,
   });
 
-/** NPS — market-linked; modeled as SIP with expected return. */
+/** NPS — market-linked accumulation phase (modeled as SIP). */
 export const calculateNPS = calculateSIP;
 
 /** CAGR from start value to end value over a period in months. */
@@ -232,7 +238,9 @@ export const calculateCAGR = (
   endValueCents: number,
   months: number
 ): number => {
-  if (startValueCents <= 0 || endValueCents <= 0 || months <= 0) return 0;
+  if (startValueCents <= 0 || months <= 0 || !Number.isFinite(startValueCents)) return 0;
+  if (endValueCents <= 0) return -100; // Complete loss of principal
+
   const years = months / 12;
   const cagr = (Math.pow(endValueCents / startValueCents, 1 / years) - 1) * 100;
   return Number.isFinite(cagr) ? cagr : 0;
@@ -242,7 +250,8 @@ export const calculateCAGR = (
 export const buildProjection = (
   fullResult: InvestmentResult,
   elapsedMonths: number,
-  calculatorFn?: (months: number) => InvestmentResult
+  calculatorFn?: (months: number) => InvestmentResult,
+  isLumpSum: boolean = false
 ): InvestmentProjection => {
   const elapsed = Math.min(Math.max(0, elapsedMonths), fullResult.tenureMonths);
   const remainingMonths = fullResult.tenureMonths - elapsed;
@@ -256,7 +265,6 @@ export const buildProjection = (
     };
   }
 
-  // If a specific formula function is provided, run exact partial calculation
   if (calculatorFn) {
     const partialResult = calculatorFn(elapsed);
     return {
@@ -271,9 +279,12 @@ export const buildProjection = (
     };
   }
 
-  // Generic fallback heuristic for non-formula projections
+  // Generic fallback heuristic: preserve full initial capital for lump-sum vs scaling recurring cashflow
   const progressRatio = elapsed / fullResult.tenureMonths;
-  const investedSoFar = roundCents(fullResult.totalInvestedCents * progressRatio);
+  const investedSoFar = isLumpSum
+    ? fullResult.totalInvestedCents
+    : roundCents(fullResult.totalInvestedCents * progressRatio);
+
   const growthRatio =
     fullResult.totalInvestedCents > 0
       ? fullResult.maturityValueCents / fullResult.totalInvestedCents
