@@ -4,16 +4,17 @@ const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
 export interface DriveApiClientConfig {
-  /** Resolves (and if necessary, silently renews) an access token, throwing if unavailable. */
   resolveToken: (token?: string | null) => Promise<string>;
-  /** Called when the Drive API reports the current token is invalid/expired. */
-  onUnauthorized: () => void;
+  /**
+   * Attempts a **silent** token refresh. Must never open interactive UI.
+   * Returns a fresh token on success, or `null` if the user must re-connect.
+   */
+  onUnauthorized: () => Promise<string | null>;
 }
 
-/** Thin, stateless wrapper around the Google Drive REST API (appDataFolder scope). */
 export class DriveApiClient {
   private resolveToken: (token?: string | null) => Promise<string>;
-  private onUnauthorized: () => void;
+  private onUnauthorized: () => Promise<string | null>;
 
   constructor(config: DriveApiClientConfig) {
     this.resolveToken = config.resolveToken;
@@ -27,7 +28,8 @@ export class DriveApiClient {
   async driveFetch<T = unknown>(
     url: string,
     token: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    isRetry = false
   ): Promise<T> {
     const response = await fetch(url, {
       ...options,
@@ -38,9 +40,15 @@ export class DriveApiClient {
     });
 
     if (response.status === 401) {
-      // Clear invalid token
-      this.onUnauthorized();
-      throw new Error('Authentication failed or token expired. Please reconnect.');
+      if (isRetry) {
+        throw new Error('Authentication failed or token expired. Please reconnect.');
+      }
+      const fresh = await this.onUnauthorized();
+      if (!fresh) {
+        throw new Error('Authentication failed or token expired. Please reconnect.');
+      }
+      // Safe to retry: request bodies are FormData / strings, both reusable.
+      return this.driveFetch<T>(url, fresh, options, true);
     }
 
     if (response.status === 403) {
@@ -54,18 +62,14 @@ export class DriveApiClient {
       throw new Error(`Google Drive API Error (${response.status}): ${response.statusText}`);
     }
 
-    if (response.status === 204) {
-      return {} as T;
-    }
+    if (response.status === 204) return {} as T;
 
     return response.json() as Promise<T>;
   }
 
-  /** Generates a sortable, timestamped backup file name, e.g. `BKP_020926_120000_000.json`. */
   generateBackupFileName(): string {
     const now = new Date();
     const pad = (num: number, len = 2) => String(num).padStart(len, '0');
-
     const DD = pad(now.getDate());
     const MM = pad(now.getMonth() + 1);
     const YY = String(now.getFullYear()).slice(-2);
@@ -73,7 +77,6 @@ export class DriveApiClient {
     const mm = pad(now.getMinutes());
     const ss = pad(now.getSeconds());
     const fff = pad(now.getMilliseconds(), 3);
-
     return `BKP_${DD}${MM}${YY}_${HH}${mm}${ss}_${fff}.json`;
   }
 
@@ -89,9 +92,7 @@ export class DriveApiClient {
       activeToken
     );
 
-    if (searchData.files?.[0]?.id) {
-      return searchData.files[0].id;
-    }
+    if (searchData.files?.[0]?.id) return searchData.files[0].id;
 
     const folderData = await this.driveFetch<{ id: string }>(
       `${DRIVE_API_BASE}/files?fields=id`,
@@ -115,10 +116,10 @@ export class DriveApiClient {
     folderNames: string[]
   ): Promise<Record<string, string>> {
     const activeToken = await this.resolveToken(token);
-    const folderEntries = await Promise.all(
-      folderNames.map(async (name) => [name, await this.getOrCreateFolder(activeToken, name)])
+    const entries = await Promise.all(
+      folderNames.map(async (name) => [name, await this.getOrCreateFolder(activeToken, name)] as const)
     );
-    return Object.fromEntries(folderEntries);
+    return Object.fromEntries(entries);
   }
 
   async pruneOldBackups(token: string, parentFolderId: string, maxBackupsToKeep: number): Promise<void> {
@@ -133,9 +134,8 @@ export class DriveApiClient {
 
     const files = result.files || [];
     if (files.length > maxBackupsToKeep) {
-      const filesToDelete = files.slice(maxBackupsToKeep);
       await Promise.all(
-        filesToDelete.map((file) =>
+        files.slice(maxBackupsToKeep).map((file) =>
           this.driveFetch(`${DRIVE_API_BASE}/files/${file.id}`, token, { method: 'DELETE' }).catch(
             (err) => console.warn(`Failed to prune backup file ${file.id}:`, err)
           )

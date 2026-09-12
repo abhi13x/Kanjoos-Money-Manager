@@ -1,12 +1,19 @@
 export type ConflictResolutionStrategy = 'merge-by-id' | 'local-wins' | 'remote-wins';
 
 export interface GDriveSyncConfig {
+  /** OAuth client ID from Google Cloud Console (public/desktop client). */
+  clientId?: string;
+  /** Registered redirect URI, e.g. `com.kanjoos.app:/oauth2redirect`. */
+  redirectUri?: string;
+  scopes?: string;
+
   tokenKey?: string;
   expiryKey?: string;
   connectedKey?: string;
+  refreshKey?: string;
   lastSyncKey?: string;
   deletedKey?: string;
-  scopes?: string;
+
   defaultFolders?: string[];
   autoSyncIntervalMs?: number;
   conflictStrategy?: ConflictResolutionStrategy;

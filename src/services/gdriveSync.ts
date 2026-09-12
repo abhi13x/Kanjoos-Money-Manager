@@ -6,22 +6,17 @@ import { mergeEntities, areEntityListsEqual, areIdListsEqual } from '@/services/
 import { sanitizeEntityList, sanitizeIdList } from '@/services/gdrive/backupValidation';
 import type {
   ConflictResolutionStrategy,
-  GDriveSyncConfig, SyncStatus,
-  GDriveFile
+  GDriveSyncConfig,
+  SyncStatus,
+  GDriveFile,
 } from '@/services/gdrive/gdriveTypes';
 
 export type { ConflictResolutionStrategy, GDriveSyncConfig, SyncStatus, GDriveFile };
 
 const DEFAULT_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_BACKUPS = 10;
+const DEFAULT_REDIRECT_URI = 'com.kanjoos.app:/oauth2redirect';
 
-/**
- * Orchestrates Google Drive backup/restore/sync for the app's local Dexie database.
- * Composes three focused collaborators:
- *  - `GDriveTokenAuth` — OAuth token acquisition, caching, and silent renewal
- *  - `DriveApiClient` — stateless Drive REST API calls
- *  - `GDriveTombstoneStore` — tracks locally-deleted ids so merges don't resurrect them
- */
 export class GDriveSyncService {
   private static instance: GDriveSyncService;
 
@@ -42,14 +37,16 @@ export class GDriveSyncService {
 
   private constructor() {
     this.tokenAuth = new GDriveTokenAuth({
+      clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '',
+      redirectUri: DEFAULT_REDIRECT_URI,
+      scopes: 'https://www.googleapis.com/auth/drive.appdata',
       tokenKey: 'kanjoos_gdrive_token',
       expiryKey: 'kanjoos_gdrive_expiry',
       connectedKey: 'kanjoos_gdrive_connected',
-      scopes: 'https://www.googleapis.com/auth/drive.appdata',
-      // Start auto-sync and create folders in background once a token is obtained
+      refreshKey: 'kanjoos_gdrive_refresh',
       onAuthenticated: (token) => {
         this.startAutoSync();
-        this.ensureAppFolders(token).catch((err) =>
+        void this.ensureAppFolders(token).catch((err) =>
           console.warn('Background folder creation failed:', err)
         );
       },
@@ -60,37 +57,41 @@ export class GDriveSyncService {
     this.driveApi = new DriveApiClient({
       resolveToken: (token) => this.tokenAuth.ensureValidToken(token),
       onUnauthorized: async () => {
-        // Step 1: Try silent token renewal first
+        // Silent refresh only. Never open interactive UI from this path — it can
+        // be triggered from timers, `online` events, or visibility changes with
+        // no user gesture, and popups will be blocked.
         const renewed = await this.tokenAuth.getValidToken(false);
-
         if (!renewed) {
-          // Step 2: Try interactive renewal (user may need to re-consent)
-          const interactive = await this.tokenAuth.getValidToken(true);
-
-          if (!interactive) {
-            // Step 3: Only clear session if ALL renewal attempts fail
-            this.clearSession();
-          }
+          this.lastError = 'Google Drive session expired. Please reconnect.';
+          this.notifyStatus();
         }
+        return renewed;
       },
     });
+
+    // If credentials survived a previous session, start auto-sync immediately
+    // rather than waiting for the user to explicitly re-authenticate.
+    if (this.tokenAuth.hasStoredCredentials()) {
+      this.startAutoSync();
+    }
   }
 
   public static getInstance(config?: GDriveSyncConfig): GDriveSyncService {
     if (!GDriveSyncService.instance) {
       GDriveSyncService.instance = new GDriveSyncService();
     }
-    if (config) {
-      GDriveSyncService.instance.configure(config);
-    }
+    if (config) GDriveSyncService.instance.configure(config);
     return GDriveSyncService.instance;
   }
 
   public configure(config: Partial<GDriveSyncConfig>): void {
     this.tokenAuth.configure({
+      clientId: config.clientId,
+      redirectUri: config.redirectUri,
       tokenKey: config.tokenKey,
       expiryKey: config.expiryKey,
       connectedKey: config.connectedKey,
+      refreshKey: config.refreshKey,
       scopes: config.scopes,
     });
     this.tombstones.configure(config.deletedKey);
@@ -114,11 +115,7 @@ export class GDriveSyncService {
   // ─── Status & Subscriptions ─────────────────────────────────
   public getStatus(): SyncStatus {
     let rawTime: string | null = null;
-    try {
-      rawTime = localStorage.getItem(this.lastSyncKey);
-    } catch {
-      // Fall through with lastSyncTime unknown rather than throwing on every render
-    }
+    try { rawTime = localStorage.getItem(this.lastSyncKey); } catch { /* ignore */ }
     return {
       lastSyncTime: rawTime ? Number(rawTime) : null,
       isSyncing: this.isSyncing,
@@ -141,7 +138,6 @@ export class GDriveSyncService {
   public startAutoSync(intervalMs = this.autoSyncIntervalMs): void {
     this.stopAutoSync();
     this.autoSyncIntervalMs = intervalMs;
-
     if (this.autoSyncIntervalMs <= 0) return;
 
     this.syncTimer = setInterval(() => {
@@ -153,8 +149,6 @@ export class GDriveSyncService {
     window.addEventListener('online', this.handleEventSync);
     document.addEventListener('visibilitychange', this.handleVisibilitySync);
 
-    // Attempt an immediate silent renewal + sync on startup instead of waiting for the
-    // first interval tick, so a stale token recovers as soon as the app reopens.
     if (this.hasStoredCredentials() && !this.hasValidAccessToken()) {
       this.sync().catch((err) => console.warn('Startup auto-sync failed:', err));
     }
@@ -176,9 +170,7 @@ export class GDriveSyncService {
   };
 
   private handleVisibilitySync = () => {
-    if (document.visibilityState === 'visible') {
-      this.handleEventSync();
-    }
+    if (document.visibilityState === 'visible') this.handleEventSync();
   };
 
   // ─── Backup File Name Generator ─────────────────────────────
@@ -204,7 +196,7 @@ export class GDriveSyncService {
   }
 
   hasCachedSession(): boolean {
-    return this.tokenAuth.hasStoredCredentials();   // ← use connectedKey, not token validity
+    return this.tokenAuth.hasStoredCredentials();
   }
 
   hasValidAccessToken(): boolean {
@@ -215,26 +207,25 @@ export class GDriveSyncService {
     return this.tokenAuth.hasStoredCredentials();
   }
 
-  /** Current localStorage key names this service reads/writes, for external listeners */
   getStorageKeys(): string[] {
     return [...this.tokenAuth.getStorageKeys(), this.lastSyncKey, this.tombstones.getStorageKey()];
   }
 
+  /** Interactive sign-in. Must be triggered by a user gesture (button click). */
   async authenticate(): Promise<string | null> {
     return this.tokenAuth.authenticate();
   }
 
+  /** Silent-only. Returns null if the user must re-authenticate interactively. */
   async getValidToken(forceInteractive = false): Promise<string | null> {
     return this.tokenAuth.getValidToken(forceInteractive);
   }
 
-  async requestAuth(prompt: '' | 'consent' | 'select_account' = ''): Promise<string | null> {
-    return this.tokenAuth.requestAuth(prompt);
-  }
-
   clearSession(): void {
     this.stopAutoSync();
-    this.tokenAuth.clearTokens();
+    void this.tokenAuth.clearTokens().catch((e) =>
+      console.warn('Failed to clear Drive tokens:', e)
+    );
     try {
       localStorage.removeItem(this.lastSyncKey);
     } catch (e) {
@@ -293,7 +284,6 @@ export class GDriveSyncService {
       } else if (this.conflictStrategy === 'remote-wins') {
         await this.importBackupFromDrive(activeToken, latestRemoteFile.name);
       } else {
-        // Merge strategy
         const remoteData = await this.readFile<{
           accounts?: unknown;
           transactions?: unknown;
@@ -301,7 +291,6 @@ export class GDriveSyncService {
           deletedIds?: unknown;
         }>(activeToken, latestRemoteFile.id);
 
-        // Merge remote deleted IDs into local tombstone state
         sanitizeIdList(remoteData.deletedIds).forEach((id) => this.markAsDeleted(id));
 
         const localAccounts = await db.accounts.toArray();
@@ -312,6 +301,7 @@ export class GDriveSyncService {
         const remoteAccounts = sanitizeEntityList<Account>(remoteData.accounts);
         const remoteTransactions = sanitizeEntityList<Transaction>(remoteData.transactions);
         const remoteCategories = sanitizeEntityList<Category>(remoteData.categories);
+
         const mergedAccounts = mergeEntities(localAccounts, remoteAccounts, deletedIds);
         const mergedTransactions = mergeEntities(localTransactions, remoteTransactions, deletedIds);
         const mergedCategories = mergeEntities(localCategories, remoteCategories, deletedIds);
@@ -326,8 +316,6 @@ export class GDriveSyncService {
           if (mergedCategories.length) await db.categories.bulkPut(mergedCategories);
         });
 
-        // Upload the merged backup only if it actually differs from what's already on Drive —
-        // avoids re-uploading an identical file on every periodic sync tick when nothing changed.
         const mergedDeletedIds = Array.from(this.getDeletedIds());
         const remoteUpToDate =
           areEntityListsEqual(mergedAccounts, remoteAccounts) &&
@@ -399,9 +387,7 @@ export class GDriveSyncService {
       ? await this.findBackupFile(activeToken, customFileName, backupFolderId)
       : await this.findLatestBackupFile(activeToken, backupFolderId);
 
-    if (!fileToImport) {
-      throw new Error('No valid backup file found on Google Drive.');
-    }
+    if (!fileToImport) throw new Error('No valid backup file found on Google Drive.');
 
     const data = await this.readFile<{
       accounts?: unknown;
@@ -429,7 +415,6 @@ export class GDriveSyncService {
 }
 
 // ─── Exported Helpers ─────────────────────────────────────────
-
 export const recordDeletedTransactionId = (id: string): void => {
   GDriveSyncService.getInstance().markAsDeleted(id);
 };
