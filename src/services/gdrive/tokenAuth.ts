@@ -18,6 +18,7 @@ export class GDriveTokenAuth {
   private connectedKey: string;
   private scopes: string;
   private onAuthenticated?: (token: string) => void;
+  private activeAuthPromise: Promise<string | null> | null = null;
 
   constructor(config: GDriveTokenAuthConfig) {
     this.tokenKey = config.tokenKey;
@@ -35,21 +36,26 @@ export class GDriveTokenAuth {
   }
 
   async ensureValidToken(token?: string | null): Promise<string> {
-    const activeToken = token || (await this.getValidToken());
-    if (!activeToken) {
-      // One more attempt: try interactive renewal before giving up
-      const retry = await this.getValidToken(true);
-      if (!retry) {
-        throw new Error('Authentication required. Please sign in to Google Drive.');
-      }
-      return retry;
+    // 1. Check if explicitly passed token or stored token is still valid
+    if (token && this.hasValidAccessToken()) {
+      return token;
     }
-    return activeToken;
+
+    const cachedToken = await this.getValidToken(false);
+    if (cachedToken) {
+      return cachedToken;
+    }
+
+    // 2. Fall back to direct interactive sign-in
+    const interactiveToken = await this.authenticate();
+    if (!interactiveToken) {
+      throw new Error('Authentication required. Please sign in to Google Drive.');
+    }
+    return interactiveToken;
   }
 
   /**
    * Returns true only if we have a **valid** (non‑expired) token.
-   * This prevents false "connected" state after the token expires.
    */
   hasValidAccessToken(): boolean {
     try {
@@ -62,9 +68,7 @@ export class GDriveTokenAuth {
   }
 
   /**
-   * True if the user has granted access before (even if the short-lived access
-   * token has since expired). Used to decide whether a silent renewal is worth
-   * attempting instead of requiring the user to sign in again from scratch.
+   * True if the user has granted access before.
    */
   hasStoredCredentials(): boolean {
     try {
@@ -74,13 +78,12 @@ export class GDriveTokenAuth {
     }
   }
 
-  /** Current localStorage key names this module reads/writes. */
   getStorageKeys(): string[] {
     return [this.tokenKey, this.expiryKey, this.connectedKey];
   }
 
+  /** Direct user-initiated interactive authentication */
   async authenticate(): Promise<string | null> {
-    // Force a fresh token, even if a cached one exists (user explicitly wants to reconnect)
     return this.requestAuth('select_account');
   }
 
@@ -93,9 +96,12 @@ export class GDriveTokenAuth {
       }
     }
 
-    // Access tokens from Google Identity Services expire after ~1 hour with no refresh
-    // token. If we were previously connected, try a silent (no-popup) renewal first so
-    // the user isn't forced to re-login just because the app was closed for a while.
+    // Immediately trigger interactive auth if requested, avoiding extra silent attempts
+    if (forceInteractive) {
+      return this.requestAuth('select_account');
+    }
+
+    // Try silent renewal if previously connected
     if (this.hasStoredCredentials()) {
       try {
         const renewed = await this.requestAuth('');
@@ -105,15 +111,16 @@ export class GDriveTokenAuth {
       }
     }
 
-    if (forceInteractive) {
-      return this.requestAuth('select_account');
-    }
-
     return null;
   }
 
   async requestAuth(prompt: '' | 'consent' | 'select_account' = ''): Promise<string | null> {
-    return new Promise((resolve, reject) => {
+    // Deduplicate concurrent auth requests
+    if (this.activeAuthPromise) {
+      return this.activeAuthPromise;
+    }
+
+    this.activeAuthPromise = new Promise<string | null>((resolve, reject) => {
       try {
         if (!window.google?.accounts?.oauth2) {
           reject(new Error('Google Identity Services SDK not loaded.'));
@@ -131,7 +138,6 @@ export class GDriveTokenAuth {
           scope: this.scopes,
           callback: (response) => {
             if (response.error) {
-              // If user cancels or error, reject
               reject(new Error(typeof response.error === 'string' ? response.error : 'Authentication failed.'));
               return;
             }
@@ -156,6 +162,9 @@ export class GDriveTokenAuth {
             this.onAuthenticated?.(response.access_token);
             resolve(response.access_token);
           },
+          error_callback: (error) => {
+            reject(new Error(error?.message || 'Authentication popup closed or blocked.'));
+          },
         });
 
         client.requestAccessToken({ prompt });
@@ -163,7 +172,11 @@ export class GDriveTokenAuth {
         console.error('OAuth initialization failed:', error);
         reject(error);
       }
+    }).finally(() => {
+      this.activeAuthPromise = null;
     });
+
+    return this.activeAuthPromise;
   }
 
   clearTokens(): void {
