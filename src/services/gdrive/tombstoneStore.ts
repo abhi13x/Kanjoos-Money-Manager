@@ -12,29 +12,53 @@ export class GDriveTombstoneStore {
     if (deletedKey) this.deletedKey = deletedKey;
   }
 
+  /** Marks a single ID as deleted and bumps it to the most recent position. */
   markAsDeleted(id: string): void {
+    if (!id) return;
+    this.markAsDeletedBatch([id]);
+  }
+
+  /**
+   * Marks multiple IDs as deleted in a single atomic localStorage operation.
+   * Refreshes insertion order so active tombstones are not evicted during trimming.
+   */
+  markAsDeletedBatch(ids: Iterable<string>): void {
     try {
       const deleted = this.getDeletedIds();
-      deleted.add(id);
-      // Keep only the most recent tombstones so this list can't grow unbounded
+
+      for (const id of ids) {
+        if (!id || typeof id !== 'string') continue;
+        // Delete first to reset insertion order and bump to the end of the Set
+        deleted.delete(id);
+        deleted.add(id);
+      }
+
+      // Keep only the most recent tombstones so storage stays bounded
       const trimmed = Array.from(deleted).slice(-MAX_TOMBSTONES);
       localStorage.setItem(this.deletedKey, JSON.stringify(trimmed));
     } catch (e) {
-      console.warn('Failed to record deleted ID locally:', e);
+      console.warn('Failed to record deleted IDs locally:', e);
     }
   }
 
   getDeletedIds(): Set<string> {
     try {
       const raw = localStorage.getItem(this.deletedKey);
-      return raw ? new Set(JSON.parse(raw)) : new Set();
+      if (!raw) return new Set();
+
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? new Set(parsed) : new Set();
     } catch {
       return new Set();
     }
   }
 
   clear(): void {
-    localStorage.removeItem(this.deletedKey);
+    try {
+      localStorage.removeItem(this.deletedKey);
+    } catch (e) {
+      console.warn('Failed to clear tombstone store:', e);
+    }
   }
 
   /** The localStorage key name this store reads/writes. */
