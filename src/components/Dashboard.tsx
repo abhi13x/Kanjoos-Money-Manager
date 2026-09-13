@@ -29,6 +29,7 @@ import Alert from '@mui/material/Alert';
 import Tooltip from '@mui/material/Tooltip';
 import Badge from '@mui/material/Badge';
 import { alpha } from '@mui/material/styles';
+import type { Theme } from '@mui/material/styles';
 
 import {
   Plus,
@@ -47,6 +48,83 @@ const USERNAME_STORAGE_KEY = 'kanjoos_username';
 const iOSFont = {
   fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Helvetica, Arial, sans-serif',
 };
+
+/**
+ * iOS "Liquid Glass" panel style — frosted, translucent, with a specular
+ * top highlight and a soft ambient shadow. Exported so you can reuse it
+ * in your tab components for a consistent glass look.
+ */
+export const glassSx = (t: Theme, opacity = 0.6) => {
+  const isLight = t.palette.mode === 'light';
+  return {
+    bgcolor: alpha(t.palette.background.paper, isLight ? opacity : opacity + 0.15),
+    backdropFilter: 'blur(24px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+    border: `1px solid ${isLight ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.1)'}`,
+    boxShadow: isLight
+      ? '0 12px 40px -8px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.6)'
+      : '0 12px 40px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+  };
+};
+
+/** Ambient colour orbs that sit behind everything so the glass has something to blur. */
+export const AmbientBackground: React.FC = () => (
+  <Box
+    aria-hidden
+    sx={{
+      position: 'fixed',
+      inset: 0,
+      zIndex: 0,
+      pointerEvents: 'none',
+      overflow: 'hidden',
+    }}
+  >
+    <Box
+      sx={{
+        position: 'absolute',
+        top: '-20%',
+        left: '-12%',
+        width: '55vmax',
+        height: '55vmax',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(0, 122, 255, 0.20) 0%, transparent 65%)',
+      }}
+    />
+    <Box
+      sx={{
+        position: 'absolute',
+        bottom: '5%',
+        right: '-18%',
+        width: '50vmax',
+        height: '50vmax',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(175, 82, 222, 0.16) 0%, transparent 65%)',
+      }}
+    />
+    <Box
+      sx={{
+        position: 'absolute',
+        top: '30%',
+        right: '15%',
+        width: '35vmax',
+        height: '35vmax',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(52, 199, 89, 0.13) 0%, transparent 65%)',
+      }}
+    />
+    <Box
+      sx={{
+        position: 'absolute',
+        bottom: '-15%',
+        left: '10%',
+        width: '40vmax',
+        height: '40vmax',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(255, 149, 0, 0.10) 0%, transparent 65%)',
+      }}
+    />
+  </Box>
+);
 
 export const Dashboard: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<number>(0);
@@ -103,9 +181,27 @@ export const Dashboard: React.FC = () => {
           alignItems: 'center',
           justifyContent: 'center',
           bgcolor: (t) => t.palette.background.default,
+          ...iOSFont,
         }}
       >
-        <CircularProgress size={36} thickness={4.5} />
+        <AmbientBackground />
+        <Paper
+          elevation={0}
+          sx={(t) => ({
+            p: 5,
+            borderRadius: '28px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 2,
+            ...glassSx(t),
+          })}
+        >
+          <CircularProgress size={36} thickness={4.5} />
+          <Typography variant="caption" sx={{ color: '#8E8E93', fontWeight: 500, fontSize: 13 }}>
+            Loading your finances…
+          </Typography>
+        </Paper>
       </Box>
     );
   }
@@ -138,30 +234,30 @@ export const Dashboard: React.FC = () => {
         WebkitTapHighlightColor: 'transparent',
         userSelect: 'none',
         pb: {
-          xs: 'calc(76px + env(safe-area-inset-bottom, 0px))',
-          md: 'calc(88px + env(safe-area-inset-bottom, 0px))',
+          xs: 'calc(96px + env(safe-area-inset-bottom, 0px))',
+          md: 'calc(104px + env(safe-area-inset-bottom, 0px))',
         },
-        pt: isDesktop ? '72px' : 0,
+        pt: isDesktop ? '108px' : 0,
       }}
     >
-      {/* Desktop Header */}
+      <AmbientBackground />
+
+      {/* Desktop Header — floating glass bar */}
       {isDesktop && (
         <AppBar
           position="fixed"
           elevation={0}
-          sx={{
-            top: 0,
-            left: 0,
-            right: 0,
+          sx={(t) => ({
+            top: 16,
+            left: 16,
+            right: 16,
             zIndex: 1100,
-            bgcolor: (t) => alpha(t.palette.background.paper, 0.8),
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            borderBottom: '1px solid',
-            borderColor: 'rgba(60, 60, 67, 0.08)',
-          }}
+            borderRadius: '24px',
+            backgroundImage: 'none', // kill MUI's default AppBar gradient
+            ...glassSx(t),
+          })}
         >
-          <Toolbar sx={{ px: 4, height: 72, ...iOSFont }}>
+          <Toolbar sx={{ px: 3, height: 68, ...iOSFont }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
               <Box>
                 <Typography
@@ -189,9 +285,21 @@ export const Dashboard: React.FC = () => {
                 </Typography>
               </Box>
 
-              {/* Drive Status Indicator with Tooltip */}
+              {/* Drive Status Indicator — glass chip */}
               <Tooltip title={getStatusText()} placement="bottom" arrow>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'default' }}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    cursor: 'default',
+                    px: 1.75,
+                    py: 0.75,
+                    borderRadius: '14px',
+                    bgcolor: (t) => alpha(t.palette.text.primary, 0.08),
+                    transition: 'background-color 0.2s ease-in-out',
+                  }}
+                >
                   {isSyncing ? (
                     <RefreshCw size={22} color="#FF9500" className="animate-spin" />
                   ) : (
@@ -223,23 +331,23 @@ export const Dashboard: React.FC = () => {
         </AppBar>
       )}
 
-      {/* Mobile Header */}
+      {/* Mobile Header — frosted glass nav bar */}
       {!isDesktop && (
         <Box
           component="header"
-          sx={{
+          sx={(t) => ({
             position: 'sticky',
             top: 0,
             zIndex: 1100,
-            borderBottom: '1px solid',
-            borderColor: 'rgba(60, 60, 67, 0.08)',
-            bgcolor: (t) => alpha(t.palette.background.paper, 0.8),
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
+            bgcolor: alpha(t.palette.background.paper, t.palette.mode === 'light' ? 0.55 : 0.6),
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            // hairline bottom edge instead of a hard border
+            boxShadow: `inset 0 -1px 0 ${t.palette.mode === 'light' ? 'rgba(60, 60, 67, 0.1)' : 'rgba(255, 255, 255, 0.08)'}`,
             pt: 'calc(12px + env(safe-area-inset-top, 0px))',
             pb: 1.5,
             ...iOSFont,
-          }}
+          })}
         >
           <Container
             maxWidth="lg"
@@ -278,7 +386,19 @@ export const Dashboard: React.FC = () => {
             </Box>
 
             <Tooltip title={getStatusText()} placement="bottom" arrow>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.75,
+                  cursor: 'default',
+                  px: 1.5,
+                  py: 0.75,
+                  borderRadius: '12px',
+                  bgcolor: (t) => alpha(t.palette.text.primary, 0.08),
+                  transition: 'background-color 0.2s ease-in-out',
+                }}
+              >
                 {isSyncing ? (
                   <RefreshCw size={20} color="#FF9500" className="animate-spin" />
                 ) : (
@@ -310,7 +430,10 @@ export const Dashboard: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <Container maxWidth="lg" sx={{ py: isDesktop ? 4 : 2.5, px: { xs: 2, sm: 3 } }}>
+      <Container
+        maxWidth="lg"
+        sx={{ py: isDesktop ? 4 : 2.5, px: { xs: 2, sm: 3 }, position: 'relative', zIndex: 1 }}
+      >
         {currentTab === 0 && (
           <SummaryTab accounts={accounts} transactions={transactions} format={formatAmount} />
         )}
@@ -338,24 +461,22 @@ export const Dashboard: React.FC = () => {
         )}
       </Container>
 
-      {/* Bottom Navigation */}
+      {/* Bottom Navigation — floating glass dock */}
       <Paper
         elevation={0}
-        sx={{
+        sx={(t) => ({
           position: 'fixed',
-          bottom: 0,
-          left: 0,
-          right: 0,
+          bottom: { xs: 'calc(12px + env(safe-area-inset-bottom, 0px))', md: 20 },
+          left: { xs: 14, sm: 24 },
+          right: { xs: 14, sm: 24 },
+          maxWidth: { sm: 640 },
+          margin: '0 auto',
           zIndex: 1000,
-          borderTop: '1px solid',
-          borderColor: 'rgba(60, 60, 67, 0.08)',
-          borderRadius: 0,
-          bgcolor: (t) => alpha(t.palette.background.paper, 0.85),
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          pb: 'env(safe-area-inset-bottom, 0px)',
+          borderRadius: '28px',
+          overflow: 'hidden',
           ...iOSFont,
-        }}
+          ...glassSx(t, 0.55),
+        })}
       >
         <BottomNavigation
           showLabels
@@ -365,18 +486,19 @@ export const Dashboard: React.FC = () => {
             if (val === 4) setSettingsView('main');
           }}
           sx={{
-            height: 60,
+            height: 64,
             bgcolor: 'transparent',
             '& .MuiBottomNavigationAction-root': {
               minWidth: 'auto',
               py: 0.75,
+              m: 0.5,
+              borderRadius: '20px',
               color: '#8E8E93',
-              transition: 'color 0.15s ease-in-out',
+              transition: 'color 0.2s ease-in-out, background-color 0.2s ease-in-out',
               '& .MuiBottomNavigationAction-label': {
                 fontSize: 11,
                 fontWeight: 500,
                 letterSpacing: '-0.01em',
-                mt: 0.25,
                 '&.Mui-selected': {
                   fontSize: 11,
                   fontWeight: 700,
@@ -384,6 +506,7 @@ export const Dashboard: React.FC = () => {
               },
               '&.Mui-selected': {
                 color: '#007AFF',
+                bgcolor: 'rgba(0, 122, 255, 0.14)',
               },
             },
           }}
@@ -396,7 +519,7 @@ export const Dashboard: React.FC = () => {
         </BottomNavigation>
       </Paper>
 
-      {/* FAB */}
+      {/* FAB — glossy iOS squircle with glow */}
       {(currentTab === 0 || currentTab === 1) && (
         <Fab
           color="primary"
@@ -404,15 +527,16 @@ export const Dashboard: React.FC = () => {
           onClick={() => setIsModalOpen(true)}
           sx={{
             position: 'fixed',
-            right: { xs: 20, sm: 28 },
-            bottom: {
-              xs: 'calc(76px + env(safe-area-inset-bottom, 0px))',
-              sm: 'calc(84px + env(safe-area-inset-bottom, 0px))',
-            },
-            boxShadow: '0px 6px 16px rgba(0, 0, 0, 0.22)',
+            right: { xs: 18, sm: 28 },
+            bottom: 'calc(96px + env(safe-area-inset-bottom, 0px))',
             zIndex: 1050,
+            borderRadius: '20px',
             bgcolor: '#007AFF',
-            '&:active': { transform: 'scale(0.95)' },
+            backgroundImage:
+              'linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.08) 45%, rgba(0, 0, 0, 0.12) 100%)',
+            border: '1px solid rgba(255, 255, 255, 0.35)',
+            boxShadow: '0 12px 32px rgba(0, 122, 255, 0.45), 0 4px 12px rgba(0, 0, 0, 0.18)',
+            '&:active': { transform: 'scale(0.94)' },
             transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
           }}
         >
@@ -422,22 +546,28 @@ export const Dashboard: React.FC = () => {
 
       <TransactionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
 
-      {/* Sync Error Snackbar */}
+      {/* Sync Error Snackbar — glass toast, lifted above the dock */}
       <Snackbar
         open={!!syncError}
         autoHideDuration={6000}
         onClose={() => setSyncError(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{
+          zIndex: 1400,
+          // !important overrides the Snackbar's inline anchor positioning
+          bottom: 'calc(108px + env(safe-area-inset-bottom, 0px)) !important',
+        }}
       >
         <Alert
           onClose={() => setSyncError(null)}
           severity="error"
-          variant="filled"
-          sx={{
+          sx={(t) => ({
             width: '100%',
-            borderRadius: 14,
+            borderRadius: '18px',
+            fontWeight: 500,
             ...iOSFont,
-          }}
+            ...glassSx(t, 0.75),
+          })}
         >
           {syncError}
         </Alert>
