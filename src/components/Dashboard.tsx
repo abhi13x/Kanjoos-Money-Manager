@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import type { FC } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/db/schema';
 import { useSettings } from '@/hooks/useSettings';
 import { useWindowSize } from '@/hooks/useWindowSize';
 import { useGDriveSession } from '@/hooks/useGDriveSession';
 import { formatCurrency } from '@/types/finance';
+import { glassSx, iOSFont, AmbientBackground } from '@/theme/glass';
 
 import { SummaryTab } from './SummaryTab';
 import { TransactionsTab } from './TransactionTab/TransactionTab';
@@ -29,7 +31,6 @@ import Alert from '@mui/material/Alert';
 import Tooltip from '@mui/material/Tooltip';
 import Badge from '@mui/material/Badge';
 import { alpha } from '@mui/material/styles';
-import type { Theme } from '@mui/material/styles';
 
 import {
   Plus,
@@ -43,96 +44,133 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+// Glass tokens now live in '@/theme/glass' (a leaf module, safe to import from
+// anywhere). Re-exported here for backward compatibility with anything that
+// still imports them from Dashboard — prefer '@/theme/glass' going forward.
+export { glassSx, iOSFont, AmbientBackground } from '@/theme/glass';
+
 const USERNAME_STORAGE_KEY = 'kanjoos_username';
 
-const iOSFont = {
-  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Helvetica, Arial, sans-serif',
+/** Named tab indices — replaces magic numbers scattered through the JSX. */
+const TAB = { SUMMARY: 0, TRANSACTIONS: 1, STATS: 2, ACCOUNTS: 3, SETTINGS: 4 } as const;
+
+/** Z-index scale — keeps dock / FAB / header / toast stacking coherent. */
+const Z = { DOCK: 1000, FAB: 1050, HEADER: 1100, TOAST: 1400 } as const;
+
+const SYNC_COLORS = { syncing: '#FF9500', connected: '#34C759', offline: '#8E8E93' } as const;
+
+interface DriveStatus {
+  isConnected: boolean;
+  isSyncing: boolean;
+  lastSyncTime?: number | string | Date | null;
+}
+
+const driveStatusColor = (s: DriveStatus) =>
+  s.isSyncing ? SYNC_COLORS.syncing : s.isConnected ? SYNC_COLORS.connected : SYNC_COLORS.offline;
+
+const driveStatusText = (s: DriveStatus) => {
+  if (s.isSyncing) return 'Syncing…';
+  if (!s.isConnected) return 'Disconnected';
+  const last = s.lastSyncTime
+    ? new Date(s.lastSyncTime).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })
+    : 'never';
+  return `Last sync: ${last}`;
 };
 
-/**
- * iOS "Liquid Glass" panel style — frosted, translucent, with a specular
- * top highlight and a soft ambient shadow. Exported so you can reuse it
- * in your tab components for a consistent glass look.
- */
-export const glassSx = (t: Theme, opacity = 0.6) => {
-  const isLight = t.palette.mode === 'light';
-  return {
-    bgcolor: alpha(t.palette.background.paper, isLight ? opacity : opacity + 0.15),
-    backdropFilter: 'blur(24px) saturate(180%)',
-    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-    border: `1px solid ${isLight ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.1)'}`,
-    boxShadow: isLight
-      ? '0 12px 40px -8px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.6)'
-      : '0 12px 40px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
-  };
+/** Drive connection chip — one implementation shared by both headers (was duplicated). */
+const DriveStatusChip: FC<{ status: DriveStatus; compact?: boolean }> = ({ status, compact = false }) => {
+  const color = driveStatusColor(status);
+  const iconSize = compact ? 20 : 22;
+
+  return (
+    <Tooltip title={driveStatusText(status)} placement="bottom" arrow>
+      <Box
+        aria-label={driveStatusText(status)}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: compact ? 0.75 : 1,
+          cursor: 'default',
+          px: compact ? 1.5 : 1.75,
+          py: 0.75,
+          borderRadius: compact ? '12px' : '14px',
+          bgcolor: (t) => alpha(t.palette.text.primary, 0.08),
+          transition: 'background-color 0.2s ease-in-out',
+          userSelect: 'none',
+        }}
+      >
+        {status.isSyncing ? (
+          <RefreshCw size={iconSize} color={SYNC_COLORS.syncing} className="animate-spin" />
+        ) : (
+          <Badge
+            variant="dot"
+            color="success"
+            invisible={!status.isConnected}
+            sx={{
+              '& .MuiBadge-badge': {
+                backgroundColor: color,
+                boxShadow: `0 0 0 2px ${alpha(color, 0.2)}`,
+              },
+            }}
+          >
+            {status.isConnected ? (
+              <Cloud size={iconSize} color={SYNC_COLORS.connected} />
+            ) : (
+              <CloudOff size={iconSize} color={SYNC_COLORS.offline} />
+            )}
+          </Badge>
+        )}
+        <Typography
+          variant="caption"
+          sx={{ color: '#8E8E93', fontWeight: 500, fontSize: compact ? 11 : 13 }}
+        >
+          {status.isSyncing ? 'Syncing' : status.isConnected ? 'Drive' : 'Offline'}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
 };
 
-/** Ambient colour orbs that sit behind everything so the glass has something to blur. */
-export const AmbientBackground: React.FC = () => (
-  <Box
-    aria-hidden
-    sx={{
-      position: 'fixed',
-      inset: 0,
-      zIndex: 0,
-      pointerEvents: 'none',
-      overflow: 'hidden',
-    }}
-  >
-    <Box
+/** Brand block — one implementation shared by both headers (was duplicated). */
+const Brand: FC<{ username: string; desktop?: boolean }> = ({ username, desktop = false }) => (
+  <Box>
+    <Typography
+      component="h1"
+      variant="h5"
       sx={{
-        position: 'absolute',
-        top: '-20%',
-        left: '-12%',
-        width: '55vmax',
-        height: '55vmax',
-        borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(0, 122, 255, 0.20) 0%, transparent 65%)',
+        fontWeight: 800,
+        letterSpacing: desktop ? '-0.03em' : '-0.04em',
+        color: '#007AFF',
+        fontSize: desktop ? 28 : 24,
+        lineHeight: 1.2,
+        userSelect: 'none',
       }}
-    />
-    <Box
+    >
+      KANJOOS
+    </Typography>
+    <Typography
+      variant={desktop ? 'body2' : 'caption'}
       sx={{
-        position: 'absolute',
-        bottom: '5%',
-        right: '-18%',
-        width: '50vmax',
-        height: '50vmax',
-        borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(175, 82, 222, 0.16) 0%, transparent 65%)',
+        color: '#8E8E93',
+        fontWeight: 500,
+        fontSize: desktop ? 15 : 13,
+        display: 'block',
+        mt: -0.5,
       }}
-    />
-    <Box
-      sx={{
-        position: 'absolute',
-        top: '30%',
-        right: '15%',
-        width: '35vmax',
-        height: '35vmax',
-        borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(52, 199, 89, 0.13) 0%, transparent 65%)',
-      }}
-    />
-    <Box
-      sx={{
-        position: 'absolute',
-        bottom: '-15%',
-        left: '10%',
-        width: '40vmax',
-        height: '40vmax',
-        borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(255, 149, 0, 0.10) 0%, transparent 65%)',
-      }}
-    />
+    >
+      Welcome back, {username}
+    </Typography>
   </Box>
 );
 
-export const Dashboard: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<number>(0);
+export const Dashboard: FC = () => {
+  const [currentTab, setCurrentTab] = useState<number>(TAB.SUMMARY);
   const [settingsView, setSettingsView] = useState<'main' | 'categories'>('main');
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const { isMobile, isTablet } = useWindowSize();
   const [syncError, setSyncError] = useState<string | null>(null);
+  const { isMobile, isTablet } = useWindowSize();
   const { isConnected, isSyncing, lastSyncTime } = useGDriveSession();
+  const { defaultCurrency } = useSettings();
 
   const [username, setUsername] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -164,15 +202,36 @@ export const Dashboard: React.FC = () => {
     };
   }, []);
 
-  const { defaultCurrency } = useSettings();
-  const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
-  const categories = useLiveQuery(() => db.categories.toArray()) || [];
-  const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
+  // "N" opens the add-transaction modal (desktop power-user shortcut) while
+  // the FAB is visible. Guarded so it never fires while typing in a field.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'n' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (currentTab === TAB.SUMMARY || currentTab === TAB.TRANSACTIONS) {
+        setIsModalOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentTab]);
 
-  const formatAmount = (cents: number) => formatCurrency(cents, defaultCurrency);
-  const isLoading = !accounts || !categories || !transactions;
+  // IMPORTANT: no `|| []` fallbacks! useLiveQuery returns undefined while the
+  // first query is pending; the old fallback swallowed that, so the loading
+  // screen never actually showed — tabs rendered with empty data instead.
+  const accounts = useLiveQuery(() => db.accounts.toArray());
+  const categories = useLiveQuery(() => db.categories.toArray());
+  const transactions = useLiveQuery(() => db.transactions.toArray());
 
-  if (isLoading) {
+  // Stable identity: lets React.memo'd child tabs skip re-renders when
+  // unrelated Dashboard state (e.g. username) changes.
+  const formatAmount = useCallback(
+    (cents: number) => formatCurrency(cents, defaultCurrency),
+    [defaultCurrency]
+  );
+
+  if (accounts === undefined || categories === undefined || transactions === undefined) {
     return (
       <Box
         sx={{
@@ -207,22 +266,8 @@ export const Dashboard: React.FC = () => {
   }
 
   const isDesktop = !isMobile && !isTablet;
-
-  // Build status badge color
-  const getStatusColor = () => {
-    if (isSyncing) return '#FF9500'; // orange
-    if (isConnected) return '#34C759'; // green
-    return '#8E8E93'; // grey
-  };
-
-  const getStatusText = () => {
-    if (isSyncing) return 'Syncing...';
-    if (isConnected) {
-      const last = lastSyncTime ? new Date(lastSyncTime).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : 'never';
-      return `Last sync: ${last}`;
-    }
-    return 'Disconnected';
-  };
+  const driveStatus: DriveStatus = { isConnected, isSyncing, lastSyncTime };
+  const fabVisible = currentTab === TAB.SUMMARY || currentTab === TAB.TRANSACTIONS;
 
   return (
     <Box
@@ -232,7 +277,8 @@ export const Dashboard: React.FC = () => {
         color: (t) => t.palette.text.primary,
         ...iOSFont,
         WebkitTapHighlightColor: 'transparent',
-        userSelect: 'none',
+        // NOTE: no global userSelect: 'none' — users should be able to copy
+        // amounts/notes. Selection is disabled on chrome (headers/dock) instead.
         pb: {
           xs: 'calc(96px + env(safe-area-inset-bottom, 0px))',
           md: 'calc(104px + env(safe-area-inset-bottom, 0px))',
@@ -251,81 +297,17 @@ export const Dashboard: React.FC = () => {
             top: 16,
             left: 16,
             right: 16,
-            zIndex: 1100,
+            zIndex: Z.HEADER,
             borderRadius: '24px',
             backgroundImage: 'none', // kill MUI's default AppBar gradient
+            userSelect: 'none',
             ...glassSx(t),
           })}
         >
           <Toolbar sx={{ px: 3, height: 68, ...iOSFont }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-              <Box>
-                <Typography
-                  variant="h5"
-                  sx={{
-                    fontWeight: 800,
-                    letterSpacing: '-0.03em',
-                    color: '#007AFF',
-                    fontSize: 28,
-                    lineHeight: 1.2,
-                  }}
-                >
-                  KANJOOS
-                </Typography>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    color: '#8E8E93',
-                    fontWeight: 500,
-                    fontSize: 15,
-                    mt: -0.5,
-                  }}
-                >
-                  Welcome back, {username}
-                </Typography>
-              </Box>
-
-              {/* Drive Status Indicator — glass chip */}
-              <Tooltip title={getStatusText()} placement="bottom" arrow>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    cursor: 'default',
-                    px: 1.75,
-                    py: 0.75,
-                    borderRadius: '14px',
-                    bgcolor: (t) => alpha(t.palette.text.primary, 0.08),
-                    transition: 'background-color 0.2s ease-in-out',
-                  }}
-                >
-                  {isSyncing ? (
-                    <RefreshCw size={22} color="#FF9500" className="animate-spin" />
-                  ) : (
-                    <Badge
-                      variant="dot"
-                      color="success"
-                      invisible={!isConnected}
-                      sx={{
-                        '& .MuiBadge-badge': {
-                          backgroundColor: getStatusColor(),
-                          boxShadow: `0 0 0 2px ${alpha(getStatusColor(), 0.2)}`,
-                        },
-                      }}
-                    >
-                      {isConnected ? (
-                        <Cloud size={22} color="#34C759" />
-                      ) : (
-                        <CloudOff size={22} color="#8E8E93" />
-                      )}
-                    </Badge>
-                  )}
-                  <Typography variant="caption" sx={{ color: '#8E8E93', fontWeight: 500, fontSize: 13 }}>
-                    {isSyncing ? 'Syncing' : isConnected ? 'Drive' : 'Offline'}
-                  </Typography>
-                </Box>
-              </Tooltip>
+              <Brand username={username} desktop />
+              <DriveStatusChip status={driveStatus} />
             </Box>
           </Toolbar>
         </AppBar>
@@ -338,7 +320,7 @@ export const Dashboard: React.FC = () => {
           sx={(t) => ({
             position: 'sticky',
             top: 0,
-            zIndex: 1100,
+            zIndex: Z.HEADER,
             bgcolor: alpha(t.palette.background.paper, t.palette.mode === 'light' ? 0.55 : 0.6),
             backdropFilter: 'blur(20px) saturate(180%)',
             WebkitBackdropFilter: 'blur(20px) saturate(180%)',
@@ -346,6 +328,7 @@ export const Dashboard: React.FC = () => {
             boxShadow: `inset 0 -1px 0 ${t.palette.mode === 'light' ? 'rgba(60, 60, 67, 0.1)' : 'rgba(255, 255, 255, 0.08)'}`,
             pt: 'calc(12px + env(safe-area-inset-top, 0px))',
             pb: 1.5,
+            userSelect: 'none',
             ...iOSFont,
           })}
         >
@@ -358,73 +341,8 @@ export const Dashboard: React.FC = () => {
               px: 2.5,
             }}
           >
-            <Box>
-              <Typography
-                variant="h5"
-                sx={{
-                  fontWeight: 800,
-                  letterSpacing: '-0.04em',
-                  color: '#007AFF',
-                  fontSize: 24,
-                  lineHeight: 1.2,
-                }}
-              >
-                KANJOOS
-              </Typography>
-              <Typography
-                variant="caption"
-                sx={{
-                  color: '#8E8E93',
-                  fontWeight: 500,
-                  fontSize: 13,
-                  display: 'block',
-                  mt: -0.5,
-                }}
-              >
-                Welcome back, {username}
-              </Typography>
-            </Box>
-
-            <Tooltip title={getStatusText()} placement="bottom" arrow>
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 0.75,
-                  cursor: 'default',
-                  px: 1.5,
-                  py: 0.75,
-                  borderRadius: '12px',
-                  bgcolor: (t) => alpha(t.palette.text.primary, 0.08),
-                  transition: 'background-color 0.2s ease-in-out',
-                }}
-              >
-                {isSyncing ? (
-                  <RefreshCw size={20} color="#FF9500" className="animate-spin" />
-                ) : (
-                  <Badge
-                    variant="dot"
-                    color="success"
-                    invisible={!isConnected}
-                    sx={{
-                      '& .MuiBadge-badge': {
-                        backgroundColor: getStatusColor(),
-                        boxShadow: `0 0 0 2px ${alpha(getStatusColor(), 0.2)}`,
-                      },
-                    }}
-                  >
-                    {isConnected ? (
-                      <Cloud size={20} color="#34C759" />
-                    ) : (
-                      <CloudOff size={20} color="#8E8E93" />
-                    )}
-                  </Badge>
-                )}
-                <Typography variant="caption" sx={{ color: '#8E8E93', fontWeight: 500, fontSize: 11 }}>
-                  {isSyncing ? 'Syncing' : isConnected ? 'Drive' : 'Offline'}
-                </Typography>
-              </Box>
-            </Tooltip>
+            <Brand username={username} />
+            <DriveStatusChip status={driveStatus} compact />
           </Container>
         </Box>
       )}
@@ -434,10 +352,10 @@ export const Dashboard: React.FC = () => {
         maxWidth="lg"
         sx={{ py: isDesktop ? 4 : 2.5, px: { xs: 2, sm: 3 }, position: 'relative', zIndex: 1 }}
       >
-        {currentTab === 0 && (
+        {currentTab === TAB.SUMMARY && (
           <SummaryTab accounts={accounts} transactions={transactions} format={formatAmount} />
         )}
-        {currentTab === 1 && (
+        {currentTab === TAB.TRANSACTIONS && (
           <TransactionsTab
             transactions={transactions}
             accounts={accounts}
@@ -445,11 +363,11 @@ export const Dashboard: React.FC = () => {
             format={formatAmount}
           />
         )}
-        {currentTab === 2 && (
+        {currentTab === TAB.STATS && (
           <StatsTab transactions={transactions} categories={categories} format={formatAmount} />
         )}
-        {currentTab === 3 && <AccountsTab accounts={accounts} format={formatAmount} />}
-        {currentTab === 4 && (
+        {currentTab === TAB.ACCOUNTS && <AccountsTab accounts={accounts} format={formatAmount} />}
+        {currentTab === TAB.SETTINGS && (
           <>
             <Box sx={{ display: settingsView === 'categories' ? 'block' : 'none' }}>
               <CategoriesTab categories={categories} onBack={() => setSettingsView('main')} />
@@ -471,19 +389,21 @@ export const Dashboard: React.FC = () => {
           right: { xs: 14, sm: 24 },
           maxWidth: { sm: 640 },
           margin: '0 auto',
-          zIndex: 1000,
+          zIndex: Z.DOCK,
           borderRadius: '28px',
           overflow: 'hidden',
+          userSelect: 'none',
           ...iOSFont,
           ...glassSx(t, 0.55),
         })}
       >
         <BottomNavigation
           showLabels
+          aria-label="Main navigation"
           value={currentTab}
           onChange={(_e, val) => {
             setCurrentTab(val);
-            if (val === 4) setSettingsView('main');
+            if (val === TAB.SETTINGS) setSettingsView('main');
           }}
           sx={{
             height: 64,
@@ -519,23 +439,30 @@ export const Dashboard: React.FC = () => {
         </BottomNavigation>
       </Paper>
 
-      {/* FAB — glossy iOS squircle with glow */}
-      {(currentTab === 0 || currentTab === 1) && (
+      {/* FAB — glossy iOS squircle with glow and springy pop-in */}
+      {fabVisible && (
         <Fab
           color="primary"
           aria-label="add transaction"
+          aria-keyshortcuts="N"
           onClick={() => setIsModalOpen(true)}
           sx={{
             position: 'fixed',
             right: { xs: 18, sm: 28 },
             bottom: 'calc(96px + env(safe-area-inset-bottom, 0px))',
-            zIndex: 1050,
+            zIndex: Z.FAB,
             borderRadius: '20px',
             bgcolor: '#007AFF',
             backgroundImage:
               'linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.08) 45%, rgba(0, 0, 0, 0.12) 100%)',
             border: '1px solid rgba(255, 255, 255, 0.35)',
             boxShadow: '0 12px 32px rgba(0, 122, 255, 0.45), 0 4px 12px rgba(0, 0, 0, 0.18)',
+            '@keyframes fabIn': {
+              from: { opacity: 0, transform: 'scale(0.55)' },
+              to: { opacity: 1, transform: 'scale(1)' },
+            },
+            animation: 'fabIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
             '&:active': { transform: 'scale(0.94)' },
             transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
           }}
@@ -553,7 +480,7 @@ export const Dashboard: React.FC = () => {
         onClose={() => setSyncError(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         sx={{
-          zIndex: 1400,
+          zIndex: Z.TOAST,
           // !important overrides the Snackbar's inline anchor positioning
           bottom: 'calc(108px + env(safe-area-inset-bottom, 0px)) !important',
         }}

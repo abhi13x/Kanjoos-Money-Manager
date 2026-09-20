@@ -9,6 +9,7 @@ export const iOSFont = {
 export const ACCOUNT_CATEGORIES: { label: string; types: AccountType[] }[] = [
   { label: 'Liquid Cash & Banking', types: ['cash', 'savings', 'wallet'] },
   { label: 'Borrowing & Credit Lines', types: ['credit_card', 'debit_card'] },
+  { label: 'Loans & Mortgages', types: ['loan', 'mortgage'] }, // ✅ ADDED
   { label: 'Equities & Long Term Assets', types: ['mutual_fund', 'stock'] },
   { label: 'Deposits & Fixed Securities', types: ['fd_rd'] },
   { label: 'National Schemes', types: ['scheme'] },

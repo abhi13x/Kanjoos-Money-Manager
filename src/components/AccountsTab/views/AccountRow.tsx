@@ -1,7 +1,7 @@
 import React from 'react';
-import { Box, Chip, IconButton, Stack, Typography, useTheme } from '@mui/material';
+import { Box, Button, Chip, IconButton, Stack, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { Edit, Trash2, TrendingUp } from 'lucide-react';
+import { Edit, Trash2, TrendingUp, Banknote } from 'lucide-react';
 import type { Account, InvestmentSubType } from '@/db/schema';
 import type { InvestmentProjection } from '@/services/investmentFormulas';
 import { SUB_TYPE_LABELS } from '../features/accountHelpers';
@@ -47,12 +47,22 @@ export interface AccountRowProps {
   format: (cents: number) => string;
   onEdit: (account: Account) => void;
   onDelete: (id: string) => void;
+  onPayEMI?: (account: Account) => void; // Added: EMI Payment handler
 }
 
 /** A single row in the account list: name, balance, optional investment projection, edit/delete actions. */
-export const AccountRow: React.FC<AccountRowProps> = ({ account: acc, projection, subType, format, onEdit, onDelete }) => {
+export const AccountRow: React.FC<AccountRowProps> = ({ 
+  account: acc, 
+  projection, 
+  subType, 
+  format, 
+  onEdit, 
+  onDelete, 
+  onPayEMI 
+}) => {
   const theme = useTheme();
   const isCredit = acc.type === 'credit_card';
+  const isLoan = acc.type === 'loan' || acc.type === 'mortgage';
 
   return (
     <Box sx={accountRowSx}>
@@ -88,7 +98,7 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account: acc, projection
           {projection && (
             <Box sx={{ ...projectionBoxSx, bgcolor: alpha('#007AFF', 0.04) }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
-                <TrendingUp size={14} color="#007AFF" />
+                <TrendingUp size={14} color="#007AFF" aria-hidden />
                 <Typography sx={{ fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#007AFF' }}>
                   Investment Projection
                 </Typography>
@@ -102,9 +112,31 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account: acc, projection
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, flexShrink: 0 }}>
-          <Typography sx={{ ...balanceSx, color: isCredit ? '#FF3B30' : 'text.primary' }}>
-            {isCredit ? `${format(acc.currentBalance)}` : format(acc.currentBalance)}
+          {/* Simplified redundant ternary */}
+          <Typography sx={{ ...balanceSx, color: isCredit || isLoan ? '#FF3B30' : 'text.primary' }}>
+            {format(acc.currentBalance)}
           </Typography>
+
+          {/* Added: Pay EMI Button */}
+          {isLoan && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Banknote size={14} aria-hidden />}
+              onClick={() => onPayEMI?.(acc)}
+              sx={{ 
+                mb: 0.5, 
+                textTransform: 'none', 
+                fontWeight: 700, 
+                borderRadius: '10px', 
+                color: '#34C759', 
+                borderColor: alpha('#34C759', 0.4),
+                '&:hover': { bgcolor: alpha('#34C759', 0.05), borderColor: '#34C759' }
+              }}
+            >
+              Pay EMI
+            </Button>
+          )}
 
           <Stack direction="row" spacing={0.5}>
             <IconButton
@@ -117,7 +149,7 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account: acc, projection
                 borderRadius: '50%',
               }}
             >
-              <Edit size={16} color="#007AFF" />
+              <Edit size={16} color="#007AFF" aria-hidden />
             </IconButton>
             <IconButton
               onClick={() => onDelete(acc.id)}
@@ -129,7 +161,7 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account: acc, projection
                 borderRadius: '50%',
               }}
             >
-              <Trash2 size={16} color="#FF3B30" />
+              <Trash2 size={16} color="#FF3B30" aria-hidden />
             </IconButton>
           </Stack>
         </Box>

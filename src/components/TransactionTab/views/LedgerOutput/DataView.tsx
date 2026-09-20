@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useCallback } from 'react';
 import { Box, Typography } from '@mui/material';
 import type { Transaction, Account, Category } from '@/db/schema';
 import DayGroupCard from './DayGroupCard';
@@ -7,7 +7,7 @@ import DayGroupCard from './DayGroupCard';
  * Helper: Resolves category names into "Parent / Child" format so TransactionRow
  * can display Parent Category on top and Child Category underneath.
  */
-const getCategoryName = (
+const resolveCategoryName = (
   tx: Transaction | null | undefined,
   categories: Category[] = []
 ): string => {
@@ -56,6 +56,13 @@ export const DataView: React.FC<DataViewProps> = memo(({
   onDeleteTx,
   onEditTx,
 }) => {
+  // FIX: useCallback maintains a stable function reference so DayGroupCard's 
+  // React.memo doesn't break due to a new inline function on every render.
+  const getCategoryName = useCallback(
+    (tx: Transaction | null | undefined) => resolveCategoryName(tx, categories),
+    [categories]
+  );
+
   if (!groupedTransactions || groupedTransactions.length === 0) {
     return (
       <Box
@@ -86,7 +93,7 @@ export const DataView: React.FC<DataViewProps> = memo(({
           accounts={accounts}
           categories={categories}
           format={format}
-          getCategoryName={(tx) => getCategoryName(tx, categories)}
+          getCategoryName={getCategoryName}
           onDeleteTx={onDeleteTx}
           onEditTx={onEditTx}
         />

@@ -1,13 +1,17 @@
 import React from 'react';
 import { Box, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import { TrendingDown, TrendingUp, ArrowRightLeft } from 'lucide-react';
+import type { TransactionType } from '../TransactionModal';
+import { iOSFont } from '@/theme/glass';
 
-export const SegmentTypeSwitcher: React.FC<{
+interface SegmentTypeSwitcherProps {
+  type: TransactionType;
+  handleTypeChange: (event: React.MouseEvent<HTMLElement>, newType: TransactionType | null) => void;
+}
+
+export const SegmentTypeSwitcher: React.FC<SegmentTypeSwitcherProps> = ({
   type,
-  handleTypeChange
-}> = ({
-  type,
-  handleTypeChange
+  handleTypeChange,
 }) => {
   return (
     <ToggleButtonGroup
@@ -20,6 +24,7 @@ export const SegmentTypeSwitcher: React.FC<{
         p: 0.5,
         borderRadius: '16px',
         border: 'none',
+        ...iOSFont,
         '& .MuiToggleButtonGroup-grouped': {
           border: 0,
           borderRadius: '12px !important',
@@ -33,28 +38,30 @@ export const SegmentTypeSwitcher: React.FC<{
             ...(type === 'expense' && { bgcolor: 'error.soft', color: 'error.main' }),
             ...(type === 'income' && { bgcolor: 'success.soft', color: 'success.main' }),
             ...(type === 'transfer' && { bgcolor: 'primary.soft', color: 'primary.main' }),
-          }
-        }
+          },
+        },
       }}
     >
-      <ToggleButton value="expense">
+      <ToggleButton value="expense" aria-label="expense">
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <TrendingDown size={18} />
+          <TrendingDown size={18} aria-hidden />
           Expense
         </Box>
       </ToggleButton>
-      <ToggleButton value="income">
+      <ToggleButton value="income" aria-label="income">
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <TrendingUp size={18} />
+          <TrendingUp size={18} aria-hidden />
           Income
         </Box>
       </ToggleButton>
-      <ToggleButton value="transfer">
+      <ToggleButton value="transfer" aria-label="transfer">
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ArrowRightLeft size={18} />
+          <ArrowRightLeft size={18} aria-hidden />
           Transfer
         </Box>
       </ToggleButton>
     </ToggleButtonGroup>
-  )
-}
+  );
+};
+
+export default SegmentTypeSwitcher;

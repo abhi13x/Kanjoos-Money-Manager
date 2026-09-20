@@ -28,6 +28,10 @@ interface GDriveStoreState {
   error: string | null;
 }
 
+interface AuthError extends Error {
+  code: string;
+}
+
 const SESSION_CHANGE_EVENT = 'kanjoos_gdrive_session_change';
 
 const syncService = GDriveSyncService.getInstance({
@@ -62,7 +66,9 @@ const subscribe = (callback: () => void) => {
   window.addEventListener('storage', handleStorage);
 
   return () => {
-    unsubscribeService();
+    if (typeof unsubscribeService === 'function') {
+      unsubscribeService();
+    }
     window.removeEventListener(SESSION_CHANGE_EVENT, callback);
     window.removeEventListener('storage', handleStorage);
   };
@@ -98,12 +104,15 @@ const getStoreSnapshot = (): GDriveStoreState => {
   return cachedState;
 };
 
-const getServerSnapshot = (): GDriveStoreState => ({
+// FIX: Cache server snapshot to prevent React hydration infinite loops
+const SERVER_SNAPSHOT: GDriveStoreState = {
   isConnected: false,
   isSyncing: false,
   lastSyncTime: null,
   error: null,
-});
+};
+
+const getServerSnapshot = (): GDriveStoreState => SERVER_SNAPSHOT;
 
 /* ==========================================================
    HOOK IMPLEMENTATION
@@ -131,9 +140,8 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     const cached = await syncService.getValidToken(false);
     if (cached) return cached;
 
-    // No valid token – throw a specific error so the UI can show a login prompt
-    const error = new Error('Authentication required. Please log in.');
-    (error as any).code = 'AUTH_REQUIRED';
+    const error = new Error('Authentication required. Please log in.') as AuthError;
+    error.code = 'AUTH_REQUIRED';
     throw error;
   }, []);
 
@@ -145,10 +153,13 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
 
   const login = useCallback(async (): Promise<string> => {
     return withPending(async () => {
-      const token = await syncService.authenticate();
-      if (!token) throw new Error('Google sign-in was cancelled.');
-      notifySessionChange(); // force UI refresh after login
-      return token;
+      try {
+        const token = await syncService.authenticate();
+        if (!token) throw new Error('Google sign-in was cancelled.');
+        return token;
+      } finally {
+        notifySessionChange();
+      }
     });
   }, [withPending]);
 
@@ -159,19 +170,24 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
 
   const sync = useCallback(async (): Promise<void> => {
     return withPending(async () => {
-      await getOrAcquireToken(); // throws if not authenticated
-      await syncService.sync();
-      notifySessionChange();
+      try {
+        await getOrAcquireToken();
+        await syncService.sync();
+      } finally {
+        notifySessionChange();
+      }
     });
   }, [getOrAcquireToken, withPending]);
 
   const exportBackup = useCallback(
     async (customFileName?: string): Promise<string> => {
       return withPending(async () => {
-        await getOrAcquireToken(); // throws if not authenticated
-        const fileName = await syncService.exportBackupToDrive(undefined, customFileName);
-        notifySessionChange();
-        return fileName;
+        try {
+          await getOrAcquireToken();
+          return await syncService.exportBackupToDrive(undefined, customFileName);
+        } finally {
+          notifySessionChange();
+        }
       });
     },
     [getOrAcquireToken, withPending]
@@ -180,9 +196,12 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
   const importBackup = useCallback(
     async (customFileName?: string): Promise<void> => {
       return withPending(async () => {
-        await getOrAcquireToken(); // throws if not authenticated
-        await syncService.importBackupFromDrive(undefined, customFileName);
-        notifySessionChange();
+        try {
+          await getOrAcquireToken();
+          await syncService.importBackupFromDrive(undefined, customFileName);
+        } finally {
+          notifySessionChange();
+        }
       });
     },
     [getOrAcquireToken, withPending]

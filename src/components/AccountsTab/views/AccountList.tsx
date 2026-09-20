@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Divider, Paper, Typography } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { Inbox } from 'lucide-react';
@@ -50,6 +50,7 @@ export interface AccountListProps {
   format: (cents: number) => string;
   onEdit: (account: Account) => void;
   onDelete: (id: string) => void;
+  onPayEMI?: (account: Account) => void;
 }
 
 /** Renders the empty state, or the accounts grouped by category with per-group subtotals. */
@@ -60,7 +61,16 @@ export const AccountList: React.FC<AccountListProps> = ({
   format,
   onEdit,
   onDelete,
+  onPayEMI,
 }) => {
+  // FIX: Create a Map for O(1) lookups of projection/subType data instead of 
+  // using array.find() inside the render loop.
+  const accountDataMap = useMemo(() => {
+    const map = new Map<string, AccountWithProjection>();
+    accountData.forEach((data) => map.set(data.account.id, data));
+    return map;
+  }, [accountData]);
+
   if (accounts.length === 0) {
     return (
       <Box
@@ -87,7 +97,7 @@ export const AccountList: React.FC<AccountListProps> = ({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      {categorizedAccounts.map((cat, idx) => {
+      {categorizedAccounts.map((cat) => {
         const catAccounts = cat.accounts;
         if (catAccounts.length === 0) return null;
 
@@ -97,7 +107,8 @@ export const AccountList: React.FC<AccountListProps> = ({
         );
 
         return (
-          <Box key={idx}>
+          // FIX: Use cat.label as a stable key instead of array index
+          <Box key={cat.label}>
             <Box sx={groupHeaderSx}>
               <Typography variant="overline" sx={groupLabelSx}>
                 {cat.label}
@@ -115,7 +126,8 @@ export const AccountList: React.FC<AccountListProps> = ({
 
             <Paper elevation={0} sx={accountPaperSx}>
               {catAccounts.map((acc, accIdx) => {
-                const data = accountData.find((d) => d.account.id === acc.id);
+                // O(1) lookup from the Map
+                const data = accountDataMap.get(acc.id);
                 const isLast = accIdx === catAccounts.length - 1;
                 return (
                   <React.Fragment key={acc.id}>
@@ -126,6 +138,7 @@ export const AccountList: React.FC<AccountListProps> = ({
                       format={format}
                       onEdit={onEdit}
                       onDelete={onDelete}
+                      onPayEMI={onPayEMI}
                     />
                     {!isLast && <Divider sx={{ ml: 2, borderColor: alpha('#3C3C43', 0.12) }} />}
                   </React.Fragment>

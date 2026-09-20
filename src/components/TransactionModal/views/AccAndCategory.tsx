@@ -1,11 +1,11 @@
 import React from 'react';
 import { Box, InputAdornment, MenuItem, TextField } from '@mui/material';
+import type { MenuProps } from '@mui/material/Menu';
 import { CreditCard, ArrowRightLeft, Tag, CornerDownRight } from 'lucide-react';
-import type { Category } from '@/db/schema';
+import type { Account, Category } from '@/db/schema';
 
-interface AccountOption {
-  id: string;
-  name: string;
+interface AccountOption extends Account {
+  // Inherits type, name, id, etc. from Account
 }
 
 interface AccAndCategoryProps {
@@ -23,6 +23,15 @@ interface AccAndCategoryProps {
   setSubCategoryId: (id: string) => void;
 }
 
+// Helper to format account names with a visual flag for liability accounts
+const formatAccountName = (acc: Account) => {
+  const isLoan = acc.type === 'loan' || acc.type === 'mortgage';
+  const isCredit = acc.type === 'credit_card';
+  if (isLoan) return `${acc.name} (Loan)`;
+  if (isCredit) return `${acc.name} (Credit)`;
+  return acc.name;
+};
+
 export const AccAndCategory: React.FC<AccAndCategoryProps> = ({ 
   type,
   accountId, 
@@ -38,6 +47,26 @@ export const AccAndCategory: React.FC<AccAndCategoryProps> = ({
   setSubCategoryId,
 }) => {
   const isTransfer = type === 'transfer';
+  
+  // Pre-filter available destination accounts so we don't run filter twice in JSX
+  const availableToAccounts = accounts.filter((acc) => acc.id !== accountId);
+
+  // FIX: Strictly typed MenuProps using MUI's built-in type
+  const menuProps: Partial<MenuProps> = {
+    slotProps: {
+      paper: {
+        sx: {
+          maxHeight: 300,
+          borderRadius: '14px',
+          mt: 0.5,
+          '& .MuiMenuItem-root': {
+            fontSize: 14,
+            py: 1,
+          },
+        },
+      },
+    },
+  };
 
   return (
     <Box 
@@ -59,21 +88,28 @@ export const AccAndCategory: React.FC<AccAndCategoryProps> = ({
         required
         fullWidth
         slotProps={{
+          select: { MenuProps: menuProps },
           input: {
             startAdornment: (
               <InputAdornment position="start">
-                <CreditCard size={18} />
+                <CreditCard size={18} aria-hidden />
               </InputAdornment>
             ),
             sx: { borderRadius: '14px' }
           }
         }}
       >
-        {accounts.map((acc) => (
-          <MenuItem key={acc.id} value={acc.id}>
-            {acc.name}
+        {accounts.length === 0 ? (
+          <MenuItem disabled value="">
+            No accounts found
           </MenuItem>
-        ))}
+        ) : (
+          accounts.map((acc) => (
+            <MenuItem key={acc.id} value={acc.id}>
+              {formatAccountName(acc)}
+            </MenuItem>
+          ))
+        )}
       </TextField>
 
       {/* Transfer Destination or Main Category */}
@@ -85,24 +121,30 @@ export const AccAndCategory: React.FC<AccAndCategoryProps> = ({
           onChange={(e) => setToAccountId(e.target.value)}
           required
           fullWidth
+          disabled={availableToAccounts.length === 0}
           slotProps={{
+            select: { MenuProps: menuProps },
             input: {
               startAdornment: (
                 <InputAdornment position="start">
-                  <ArrowRightLeft size={18} />
+                  <ArrowRightLeft size={18} aria-hidden />
                 </InputAdornment>
               ),
               sx: { borderRadius: '14px' }
             }
           }}
         >
-          {accounts
-            .filter((acc) => acc.id !== accountId)
-            .map((acc) => (
+          {availableToAccounts.length === 0 ? (
+            <MenuItem disabled value="">
+              Need another account
+            </MenuItem>
+          ) : (
+            availableToAccounts.map((acc) => (
               <MenuItem key={acc.id} value={acc.id}>
-                {acc.name}
+                {formatAccountName(acc)}
               </MenuItem>
-            ))}
+            ))
+          )}
         </TextField>
       ) : (
         <TextField
@@ -113,10 +155,11 @@ export const AccAndCategory: React.FC<AccAndCategoryProps> = ({
           required
           fullWidth
           slotProps={{
+            select: { MenuProps: menuProps },
             input: {
               startAdornment: (
                 <InputAdornment position="start">
-                  <Tag size={18} />
+                  <Tag size={18} aria-hidden />
                 </InputAdornment>
               ),
               sx: { borderRadius: '14px' }
@@ -150,10 +193,11 @@ export const AccAndCategory: React.FC<AccAndCategoryProps> = ({
             gridColumn: { xs: '1 / -1', sm: '1 / -1' }
           }}
           slotProps={{
+            select: { MenuProps: menuProps },
             input: {
               startAdornment: (
                 <InputAdornment position="start">
-                  <CornerDownRight size={18} />
+                  <CornerDownRight size={18} aria-hidden />
                 </InputAdornment>
               ),
               sx: { borderRadius: '14px' }
