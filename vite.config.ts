@@ -60,6 +60,11 @@ export default defineConfig(({ mode }) => ({
     watch: {
       usePolling: true,
     },
+    // FIX: Add these headers to allow Google OAuth popups to communicate
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+    },
   },
   build: {
     // Pass optimization configuration to the Rolldown engine
