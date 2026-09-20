@@ -5,7 +5,7 @@ import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: mode === 'production' ? '/Kanjoos_Money_Manager/' : '/',
+  base: mode === 'production' ? '/kanjoos-money-manager/' : '/',
   plugins: [
     react(),
     VitePWA({
