@@ -6,18 +6,13 @@ export interface UseGDriveSessionReturn {
   isSyncing: boolean;
   lastSyncTime: number | null;
   error: string | null;
-  isPending: boolean; // per-instance pending flag
-  /** Checks for a valid token; throws `AUTH_REQUIRED` if none exists. */
+  isPending: boolean;
   ensureAuthenticated: () => Promise<string>;
-  /** Explicitly triggers the Google OAuth popup; returns the token. */
   login: () => Promise<string>;
-  /** Disconnect and clear session. */
+  loginRedirect: () => void; // NEW: Redirect flow
   disconnect: () => void;
-  /** Full sync – will throw `AUTH_REQUIRED` if not logged in. */
   sync: () => Promise<void>;
-  /** Export backup – throws `AUTH_REQUIRED` if not logged in. */
   exportBackup: (customFileName?: string) => Promise<string>;
-  /** Import backup – throws `AUTH_REQUIRED` if not logged in. */
   importBackup: (customFileName?: string) => Promise<void>;
 }
 
@@ -33,11 +28,14 @@ interface AuthError extends Error {
 }
 
 const SESSION_CHANGE_EVENT = 'kanjoos_gdrive_session_change';
+const TOKEN_KEY = 'kanjoos_gdrive_token';
+const EXPIRY_KEY = 'kanjoos_gdrive_expiry';
+const CONNECTED_KEY = 'kanjoos_gdrive_connected';
 
 const syncService = GDriveSyncService.getInstance({
-  tokenKey: 'kanjoos_gdrive_token',
-  expiryKey: 'kanjoos_gdrive_expiry',
-  connectedKey: 'kanjoos_gdrive_connected',
+  tokenKey: TOKEN_KEY,
+  expiryKey: EXPIRY_KEY,
+  connectedKey: CONNECTED_KEY,
   defaultFolders: ['Backups', 'Exports'],
 });
 
@@ -58,22 +56,15 @@ const getStoreSnapshot = (): GDriveStoreState => {
   };
 };
 
-/* ==========================================================
-   HOOK IMPLEMENTATION
-   ========================================================== */
-
 export const useGDriveSession = (): UseGDriveSessionReturn => {
   const [storeState, setStoreState] = useState<GDriveStoreState>(getStoreSnapshot);
   const [isPending, setIsPending] = useState<boolean>(false);
   const pendingCountRef = useRef(0);
 
-  // FIX: Replaced useSyncExternalStore with standard useState/useEffect
-  // to prevent React type recognition errors.
   useEffect(() => {
     const updateState = () => setStoreState(getStoreSnapshot());
-
     const unsubscribeService = syncService.subscribe(updateState);
-
+    
     const handleStorage = (event: StorageEvent) => {
       if (event.key === null || syncService.getStorageKeys().includes(event.key)) {
         updateState();
@@ -84,12 +75,33 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     window.addEventListener('storage', handleStorage);
 
     return () => {
-      if (typeof unsubscribeService === 'function') {
-        unsubscribeService();
-      }
+      if (typeof unsubscribeService === 'function') unsubscribeService();
       window.removeEventListener(SESSION_CHANGE_EVENT, updateState);
       window.removeEventListener('storage', handleStorage);
     };
+  }, []);
+
+  // FIX: Handle Redirect Callback (when Google sends us back)
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes('access_token')) {
+      const params = new URLSearchParams(hash.substring(1));
+      const accessToken = params.get('access_token');
+      const expiresIn = params.get('expires_in');
+      
+      if (accessToken && expiresIn) {
+        // Save token to localStorage so GDriveSyncService can use it
+        localStorage.setItem(TOKEN_KEY, accessToken);
+        localStorage.setItem(EXPIRY_KEY, (Date.now() + Number(expiresIn) * 1000).toString());
+        localStorage.setItem(CONNECTED_KEY, 'true');
+        
+        // Clear the URL hash so it doesn't loop
+        window.history.replaceState(null, '', window.location.pathname);
+        
+        // Notify the app that we are logged in
+        notifySessionChange();
+      }
+    }
   }, []);
 
   const withPending = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
@@ -103,7 +115,6 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     }
   }, []);
 
-  // ─── Private helper – NO popup ──────────────────────────────
   const getOrAcquireToken = useCallback(async (): Promise<string> => {
     const cached = await syncService.getValidToken(false);
     if (cached) return cached;
@@ -113,23 +124,29 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     throw error;
   }, []);
 
-  // ─── Public methods ──────────────────────────────────────────
-
   const ensureAuthenticated = useCallback(async (): Promise<string> => {
     return withPending(() => getOrAcquireToken());
   }, [getOrAcquireToken, withPending]);
 
   const login = useCallback(async (): Promise<string> => {
     return withPending(async () => {
-      try {
-        const token = await syncService.authenticate();
-        if (!token) throw new Error('Google sign-in was cancelled.');
-        return token;
-      } finally {
-        notifySessionChange();
-      }
+      const token = await syncService.getValidToken(true);
+      if (!token) throw new Error('Google sign-in was cancelled.');
+      notifySessionChange();
+      return token;
     });
   }, [withPending]);
+
+  // NEW: Redirect Flow (Bypasses mobile popup blockers completely)
+  const loginRedirect = useCallback(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const redirectUri = window.location.origin + window.location.pathname;
+    const scope = 'https://www.googleapis.com/auth/drive.appdata';
+    const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&include_granted_scopes=true&state=kanjoos_auth`;
+    
+    // This leaves the app and goes to Google
+    window.location.href = url;
+  }, []);
 
   const disconnect = useCallback(() => {
     syncService.clearSession();
@@ -180,6 +197,7 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     isPending,
     ensureAuthenticated,
     login,
+    loginRedirect,
     disconnect,
     sync,
     exportBackup,

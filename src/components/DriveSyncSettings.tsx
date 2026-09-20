@@ -81,6 +81,7 @@ export const DriveSyncSettings: React.FC<DriveSyncSettingsProps> = ({ onBack }) 
     sync,
     exportBackup,
     importBackup,
+    loginRedirect, // FIX: Pull the new redirect function from the hook
   } = useGDriveSession();
 
   const [localError, setLocalError] = useState<string | null>(null);
@@ -126,23 +127,23 @@ export const DriveSyncSettings: React.FC<DriveSyncSettingsProps> = ({ onBack }) 
         await action();
         if (successMsg) setSuccess(successMsg);
       } catch (err) {
-        setLocalError(err instanceof Error ? err.message : 'Operation failed');
+        // FIX: If silent auth fails, trigger the redirect flow instead of throwing an error
+        const isAuthError = err instanceof Error && err.message.includes('Authentication required');
+        if (isAuthError) {
+          loginRedirect();
+        } else {
+          setLocalError(err instanceof Error ? err.message : 'Operation failed');
+        }
       }
     },
-    [ensureAuthenticated]
+    [ensureAuthenticated, loginRedirect]
   );
 
   // ─── Handlers ────────────────────────────────────────────────
-  const handleConnect = useCallback(async () => {
-    setLocalError(null);
-    setSuccess(null);
-    try {
-      await ensureAuthenticated();
-      setSuccess('Connected to Google Drive');
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to connect');
-    }
-  }, [ensureAuthenticated]);
+  const handleConnect = useCallback(() => {
+    // FIX: Use full-page redirect instead of popup to bypass iOS PWA blockers
+    loginRedirect();
+  }, [loginRedirect]);
 
   const handleDisconnect = useCallback(() => {
     disconnect();
