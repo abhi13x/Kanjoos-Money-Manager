@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { GDriveSyncService } from '@/services/gdriveSync';
-import type { GDriveSyncConfig, SyncStatus } from '@/services/gdrive/gdriveTypes';
 
 export interface UseGDriveSessionReturn {
   isConnected: boolean;
@@ -48,97 +47,54 @@ const notifySessionChange = () => {
   }
 };
 
-/* ==========================================================
-   EXTERNAL STORE SUBSCRIPTION
-   ========================================================== */
-
-const subscribe = (callback: () => void) => {
-  if (typeof window === 'undefined') return () => {};
-
-  const unsubscribeService = syncService.subscribe(callback);
-
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === null || syncService.getStorageKeys().includes(event.key)) {
-      callback();
-    }
-  };
-
-  window.addEventListener(SESSION_CHANGE_EVENT, callback);
-  window.addEventListener('storage', handleStorage);
-
-  return () => {
-    if (typeof unsubscribeService === 'function') {
-      unsubscribeService();
-    }
-    window.removeEventListener(SESSION_CHANGE_EVENT, callback);
-    window.removeEventListener('storage', handleStorage);
-  };
-};
-
-let cachedState: GDriveStoreState = {
-  isConnected: false,
-  isSyncing: false,
-  lastSyncTime: null,
-  error: null,
-};
-
 const getStoreSnapshot = (): GDriveStoreState => {
   const status = syncService.getStatus();
   const isConnected = syncService.hasCachedSession();
-
-  if (
-    cachedState.isConnected === isConnected &&
-    cachedState.isSyncing === status.isSyncing &&
-    cachedState.lastSyncTime === status.lastSyncTime &&
-    cachedState.error === status.error
-  ) {
-    return cachedState;
-  }
-
-  cachedState = {
+  return {
     isConnected,
     isSyncing: status.isSyncing,
     lastSyncTime: status.lastSyncTime,
     error: status.error,
   };
-
-  return cachedState;
 };
-
-// FIX: Cache server snapshot to prevent React hydration infinite loops
-const SERVER_SNAPSHOT: GDriveStoreState = {
-  isConnected: false,
-  isSyncing: false,
-  lastSyncTime: null,
-  error: null,
-};
-
-const getServerSnapshot = (): GDriveStoreState => SERVER_SNAPSHOT;
 
 /* ==========================================================
    HOOK IMPLEMENTATION
    ========================================================== */
 
 export const useGDriveSession = (): UseGDriveSessionReturn => {
-  const storeState = useSyncExternalStore(subscribe, getStoreSnapshot, getServerSnapshot);
-
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>(syncService.getStatus());
+  const [storeState, setStoreState] = useState<GDriveStoreState>(getStoreSnapshot);
   const [isPending, setIsPending] = useState<boolean>(false);
-  const [isConnected, setIsConnected] = useState<boolean>(syncService.hasStoredCredentials());
-  const [error, setError] = useState<string | null>(null);
+  const pendingCountRef = useRef(0);
 
-  // Subscribe to sync service state updates
+  // FIX: Replaced useSyncExternalStore with standard useState/useEffect
+  // to prevent React type recognition errors.
   useEffect(() => {
-    const unsubscribe = syncService.subscribe((status) => {
-      setSyncStatus(status);
-      setIsConnected(syncService.hasStoredCredentials());
-    });
-    return () => unsubscribe();
-  }, [syncService]);
+    const updateState = () => setStoreState(getStoreSnapshot());
 
-  const ensureAuthenticated = useCallback(async () => {
+    const unsubscribeService = syncService.subscribe(updateState);
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || syncService.getStorageKeys().includes(event.key)) {
+        updateState();
+      }
+    };
+
+    window.addEventListener(SESSION_CHANGE_EVENT, updateState);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      if (typeof unsubscribeService === 'function') {
+        unsubscribeService();
+      }
+      window.removeEventListener(SESSION_CHANGE_EVENT, updateState);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  const withPending = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    pendingCountRef.current += 1;
     setIsPending(true);
-    setError(null);
     try {
       return await fn();
     } finally {
@@ -157,14 +113,11 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     throw error;
   }, []);
 
-      // 2. If no valid token exists, trigger interactive login popup
-      if (!token) {
-        token = await syncService.authenticate();
-      }
+  // ─── Public methods ──────────────────────────────────────────
 
-      if (!token) {
-        throw new Error('User is not authenticated with Google Drive.');
-      }
+  const ensureAuthenticated = useCallback(async (): Promise<string> => {
+    return withPending(() => getOrAcquireToken());
+  }, [getOrAcquireToken, withPending]);
 
   const login = useCallback(async (): Promise<string> => {
     return withPending(async () => {
@@ -180,9 +133,8 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
 
   const disconnect = useCallback(() => {
     syncService.clearSession();
-    setIsConnected(false);
-    setError(null);
-  }, [syncService]);
+    notifySessionChange();
+  }, []);
 
   const sync = useCallback(async (): Promise<void> => {
     return withPending(async () => {
@@ -224,17 +176,13 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
   );
 
   return {
-    isConnected,
-    isSyncing: syncStatus.isSyncing,
+    ...storeState,
     isPending,
-    lastSyncTime: syncStatus.lastSyncTime,
-    error: error || syncStatus.error,
     ensureAuthenticated,
+    login,
     disconnect,
     sync,
     exportBackup,
     importBackup,
   };
-}
-
-export default useGDriveSession;
+};
