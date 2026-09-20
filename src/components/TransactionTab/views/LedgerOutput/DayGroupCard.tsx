@@ -1,4 +1,4 @@
-import React, { memo, useState, useRef } from 'react';
+import React, { memo, useState, useRef, useMemo } from 'react';
 import { Box, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { Trash2, TrendingUp, TrendingDown } from 'lucide-react';
@@ -77,19 +77,19 @@ const formatAccountLabel = (tx: Transaction, account?: Account, toAccount?: Acco
  */
 const TransactionRowItem = memo(({
   tx,
-  accounts = [],
+  accountsMap,
   getCategoryName,
   format = defaultFormat,
-  onDelete,
-  onEdit,
+  onDeleteTx,
+  onEditTx,
   isLast = false,
 }: {
   tx: Transaction;
-  accounts?: Account[];
+  accountsMap?: Map<string, Account>;
   getCategoryName?: (tx: Transaction) => string;
   format?: (cents: number) => string;
-  onDelete?: () => void;
-  onEdit?: () => void;
+  onDeleteTx?: (id: string) => void;
+  onEditTx?: (tx: Transaction) => void;
   isLast?: boolean;
 }) => {
   const theme = useTheme();
@@ -98,15 +98,16 @@ const TransactionRowItem = memo(({
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const touchStartXRef = useRef<number | null>(null);
   const currentTranslateRef = useRef<number>(0);
+  const currentDragXRef = useRef<number>(0); // Tracks live drag position to prevent race conditions
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (!onDelete) return;
+    if (!onDeleteTx) return;
     touchStartXRef.current = e.touches[0].clientX;
     setIsDragging(true);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartXRef.current === null || !onDelete) return;
+    if (touchStartXRef.current === null || !onDeleteTx) return;
 
     const currentX = e.touches[0].clientX;
     const diffX = currentX - touchStartXRef.current;
@@ -114,15 +115,17 @@ const TransactionRowItem = memo(({
 
     const newOffset = Math.min(0, Math.max(-DELETE_ACTION_WIDTH - 20, baseOffset + diffX));
     setTranslateX(newOffset);
+    currentDragXRef.current = newOffset;
   };
 
   const handleTouchEnd = () => {
-    if (!onDelete) return;
+    if (!onDeleteTx) return;
 
     setIsDragging(false);
     touchStartXRef.current = null;
 
-    if (translateX < -DELETE_ACTION_WIDTH / 2) {
+    // Evaluate the ref instead of state to avoid async state batching issues
+    if (currentDragXRef.current < -DELETE_ACTION_WIDTH / 2) {
       setTranslateX(-DELETE_ACTION_WIDTH);
       currentTranslateRef.current = -DELETE_ACTION_WIDTH;
     } else {
@@ -137,11 +140,20 @@ const TransactionRowItem = memo(({
       currentTranslateRef.current = 0;
       return;
     }
-    onEdit?.();
+    onEditTx?.(tx);
   };
 
-  const account = accounts.find((a) => a.id === tx.accountId);
-  const toAccount = tx.toAccountId ? accounts.find((a) => a.id === tx.toAccountId) : null;
+  // Keyboard accessibility
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleRowClick();
+    }
+  };
+
+  // Safely handle optional accountId / toAccountId from the schema
+  const account = tx.accountId ? accountsMap?.get(tx.accountId) : undefined;
+  const toAccount = tx.toAccountId ? accountsMap?.get(tx.toAccountId) : undefined;
   const categoryName = getCategoryName ? getCategoryName(tx) : 'Uncategorized';
 
   const { parentCategory, childCategory } = parseCategories(tx, categoryName);
@@ -157,14 +169,17 @@ const TransactionRowItem = memo(({
   return (
     <Box sx={{ position: 'relative', overflow: 'hidden', width: '100%' }}>
       {/* Revealed Delete Action */}
-      {onDelete && (
+      {onDeleteTx && (
         <Box
           onClick={(e) => {
             e.stopPropagation();
-            onDelete();
+            onDeleteTx(tx.id);
             setTranslateX(0);
             currentTranslateRef.current = 0;
           }}
+          role="button"
+          tabIndex={0}
+          aria-label={`Delete transaction ${tx.note || parentCategory}`}
           sx={{
             position: 'absolute',
             top: 0,
@@ -181,7 +196,7 @@ const TransactionRowItem = memo(({
             '&:active': { filter: 'brightness(0.9)' },
           }}
         >
-          <Trash2 size={20} color="#ffffff" />
+          <Trash2 size={20} color="#ffffff" aria-hidden />
         </Box>
       )}
 
@@ -191,6 +206,10 @@ const TransactionRowItem = memo(({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onClick={handleRowClick}
+        onKeyDown={handleKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-label={`Transaction: ${parentCategory}. Amount: ${format(tx.amount)}`}
         sx={{
           position: 'relative' as const,
           zIndex: 2,
@@ -207,6 +226,7 @@ const TransactionRowItem = memo(({
           fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
           cursor: 'pointer',
           userSelect: 'none',
+          outline: 'none',
 
           // Inset Divider Line
           ...(!isLast && {
@@ -222,6 +242,9 @@ const TransactionRowItem = memo(({
           }),
           '&:active': {
             bgcolor: (t) => alpha(t.palette.action.active, 0.05),
+          },
+          '&:focus-visible': {
+            boxShadow: `inset 0 0 0 2px ${IOS_COLORS.blue}`,
           },
         }}
       >
@@ -340,17 +363,24 @@ export const DayGroupCard: React.FC<DayGroupProps> = memo(({
   const isNetPositive = netCents >= 0;
   const { dayNum, dayLabel } = parseGroupTitle(groupTitle);
 
+  // Create a Map for O(1) account lookups instead of O(N) array.find() per row
+  const accountsMap = useMemo(() => {
+    const map = new Map<string, Account>();
+    accounts.forEach((acc) => map.set(acc.id, acc));
+    return map;
+  }, [accounts]);
+
   return (
     <Box
       sx={{
         mt: 2,
         mb: 2,
-        borderRadius: '16px', // Outer iOS Rounded Container
+        borderRadius: '16px',
         bgcolor: 'background.paper',
         border: '1px solid',
         borderColor: (t) => alpha(t.palette.divider, 0.2),
         boxShadow: '0 2px 10px rgba(0, 0, 0, 0.08)',
-        overflow: 'hidden', // Clips child transaction swipes neatly inside corners
+        overflow: 'hidden',
       }}
     >
       {/* 1. Header Section */}
@@ -431,7 +461,7 @@ export const DayGroupCard: React.FC<DayGroupProps> = memo(({
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-              <TrendingUp size={15} color={IOS_COLORS.blue} />
+              <TrendingUp size={15} color={IOS_COLORS.blue} aria-hidden />
               <Typography
                 sx={{
                   fontWeight: 600,
@@ -445,7 +475,7 @@ export const DayGroupCard: React.FC<DayGroupProps> = memo(({
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-              <TrendingDown size={15} color={IOS_COLORS.red} />
+              <TrendingDown size={15} color={IOS_COLORS.red} aria-hidden />
               <Typography
                 sx={{
                   fontWeight: 600,
@@ -490,11 +520,11 @@ export const DayGroupCard: React.FC<DayGroupProps> = memo(({
           <TransactionRowItem
             key={tx.id || idx}
             tx={tx}
-            accounts={accounts}
+            accountsMap={accountsMap}
             getCategoryName={getCategoryName}
             format={format}
-            onDelete={onDeleteTx ? () => onDeleteTx(tx.id) : undefined}
-            onEdit={onEditTx ? () => onEditTx(tx) : undefined}
+            onDeleteTx={onDeleteTx} // Pass raw function, preserve memo
+            onEditTx={onEditTx}     // Pass raw function, preserve memo
             isLast={idx === transactions.length - 1}
           />
         ))}

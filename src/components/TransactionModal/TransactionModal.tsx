@@ -23,6 +23,16 @@ export type RepeatInterval = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 const VALID_INTERVALS: RepeatInterval[] = ['none', 'daily', 'weekly', 'monthly', 'yearly'];
 
+/** FIX: Safely converts a timestamp to a 'YYYY-MM-DD' string in LOCAL time,
+ *  preventing date shifts when saving or loading across timezones. */
+const toLocalDateString = (timestamp: number): string => {
+  const d = new Date(timestamp);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const TransactionModal: React.FC<TransactionModalProps> = ({
   isOpen,
   onClose,
@@ -34,17 +44,16 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   const [toAccountId, setToAccountId] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [subCategoryId, setSubCategoryId] = useState('');
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(() => toLocalDateString(Date.now()));
   const [note, setNote] = useState('');
   const [description, setDescription] = useState('');
   const [isRecurring, setIsRecurring] = useState(false);
   const [repeatInterval, setRepeatInterval] = useState<RepeatInterval>('monthly');
 
-  // IndexedDB Dexie Live Queries — memoized so the array reference is stable across
-  // unrelated re-renders (only changes when the underlying query result actually changes)
-  const rawAccounts = useLiveQuery(() => db.accounts.toArray());
+  // IndexedDB Dexie Live Queries — fallback to empty array to maintain stable references
+  const rawAccounts = useLiveQuery(() => db.accounts.toArray(), [], [] as never[]);
   const accounts = useMemo(() => rawAccounts ?? [], [rawAccounts]);
-  const rawCategories = useLiveQuery(() => db.categories.toArray());
+  const rawCategories = useLiveQuery(() => db.categories.toArray(), [], [] as never[]);
   const categories = useMemo(() => rawCategories ?? [], [rawCategories]);
 
   // Reset/populate form fields whenever the modal opens for a (new) transaction, or once
@@ -62,8 +71,8 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       setToAccountId(editTransaction.toAccountId ?? '');
       setDate(
         editTransaction.date
-          ? new Date(editTransaction.date).toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0]
+          ? toLocalDateString(editTransaction.date)
+          : toLocalDateString(Date.now())
       );
       setNote(editTransaction.note ?? '');
       setDescription(editTransaction.description ?? '');
@@ -88,7 +97,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       setToAccountId('');
       setCategoryId('');
       setSubCategoryId('');
-      setDate(new Date().toISOString().split('T')[0]);
+      setDate(toLocalDateString(Date.now()));
       setNote('');
       setDescription('');
       setIsRecurring(false);
@@ -130,8 +139,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     if (isNaN(parsedAmount) || parsedAmount <= 0) return;
 
     const amountCents = Math.round(parsedAmount * 100);
-
     const finalCategoryId = subCategoryId || categoryId;
+
+    const [year, month, day] = date.split('-').map(Number);
+    const localDateTimestamp = new Date(year, month - 1, day).getTime();
 
     const payload = {
       amount: amountCents,
@@ -139,19 +150,24 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       accountId,
       toAccountId: type === 'transfer' ? toAccountId : undefined,
       categoryId: type === 'transfer' ? undefined : (finalCategoryId || undefined),
-      date: new Date(date).getTime(),
+      date: localDateTimestamp,
       note: note.trim(),
       description: description.trim(),
       isRecurring,
       repeatInterval: isRecurring ? repeatInterval : ('none' as const),
-      updatedAt: Date.now(), // ✅ added to satisfy type
+      updatedAt: Date.now(),
+      
+      // FIX: Preserve EMI tracking fields if the user is editing an existing EMI transaction.
+      // This prevents the links from breaking if they just want to rename the note.
+      loanAccountId: editTransaction?.loanAccountId,
+      installmentNumber: editTransaction?.installmentNumber,
     };
 
     try {
       if (editTransaction?.id) {
         await updateTransactionWithSync(editTransaction.id, payload);
       } else {
-        await addTransactionWithSync(payload);
+        await addTransactionWithSync({ ...payload, id: crypto.randomUUID() } as Transaction);
       }
       onClose();
     } catch (err) {

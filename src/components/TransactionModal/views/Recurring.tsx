@@ -3,29 +3,33 @@ import { Box, TextField, Typography, Switch, MenuItem } from '@mui/material';
 import { Repeat } from 'lucide-react';
 import type { RepeatInterval } from '../TransactionModal';
 
-export const Recurring: React.FC<{
-  isRecurring,
-  setIsRecurring,
-  repeatInterval,
-  setRepeatInterval: React.Dispatch<React.SetStateAction<RepeatInterval>>
-}> = ({
-  isRecurring,
-  setIsRecurring,
-  repeatInterval,
-  setRepeatInterval
+interface RecurringProps {
+  isRecurring: boolean;
+  setIsRecurring: (value: boolean) => void;
+  repeatInterval: RepeatInterval;
+  setRepeatInterval: React.Dispatch<React.SetStateAction<RepeatInterval>>;
+}
 
- }) => {
+export const Recurring: React.FC<RecurringProps> = ({
+  isRecurring,
+  setIsRecurring,
+  repeatInterval,
+  setRepeatInterval,
+}) => {
   return (
     <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '14px', p: 2 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Repeat size={18} />
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>Recurring Transaction</Typography>
+          <Repeat size={18} aria-hidden />
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            Recurring Transaction
+          </Typography>
         </Box>
         <Switch
           checked={isRecurring}
           onChange={(e) => setIsRecurring(e.target.checked)}
           size="small"
+          slotProps={{ input: { 'aria-label': 'Toggle recurring transaction' } }}
         />
       </Box>
 
@@ -47,5 +51,7 @@ export const Recurring: React.FC<{
         </TextField>
       )}
     </Box>
-  )
-}
+  );
+};
+
+export default Recurring;

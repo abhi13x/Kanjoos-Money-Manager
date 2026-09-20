@@ -1,15 +1,17 @@
 import Dexie, { type Table } from 'dexie';
 
-export type AccountType = 
-  | 'cash' 
-  | 'savings' 
-  | 'wallet' 
-  | 'credit_card' 
-  | 'debit_card' 
-  | 'mutual_fund' 
-  | 'stock' 
-  | 'fd_rd' 
-  | 'scheme';
+export type AccountType =
+  | 'cash'
+  | 'savings'
+  | 'wallet'
+  | 'credit_card'
+  | 'debit_card'
+  | 'mutual_fund'
+  | 'stock'
+  | 'fd_rd'
+  | 'scheme'
+  | 'loan'      
+  | 'mortgage'; 
 
 export type InvestmentSubType = 'fd' | 'rd' | 'sip' | 'lumpsum' | 'ppf' | 'nps' | 'epfo';
 export type CompoundingFrequency = 'monthly' | 'quarterly' | 'annually';
@@ -19,19 +21,22 @@ export interface Account {
   name: string;
   type: AccountType;
   initialBalance: number;
+  // Convention: liability accounts (loan/mortgage/credit_card) hold a NEGATIVE
+  // balance = outstanding debt; getAccountBalances() takes Math.abs().
   currentBalance: number;
   currency: string;
-  updatedAt: number;               // ✅ added
+  updatedAt: number;
   repeatInvestmentDate?: number;
-  interestRate?: number;
+  interestRate?: number;        // loans: annual interest % p.a. (used by EMI calc)
   expectedReturnRate?: number;
   statementDate?: number;
-  dueDate?: number;
+  dueDate?: number;             // loans: next EMI due date
   monthlyInvestment?: number;
-  startDate?: number;
-  tenureMonths?: number;
+  startDate?: number;           // loans: first EMI due date
+  tenureMonths?: number;        // loans: remaining tenure (used by EMI calc)
   investmentSubType?: InvestmentSubType;
   compoundingFrequency?: CompoundingFrequency;
+  processingFee?: number;       // NEW: One-time upfront fee for loans (sub-units)
   color?: string;
   icon?: string;
 }
@@ -43,7 +48,7 @@ export interface Category {
   parentId?: string | null;
   color?: string;
   icon?: string;
-  updatedAt: number;               // ✅ added
+  updatedAt: number;
 }
 
 export interface Transaction {
@@ -59,7 +64,10 @@ export interface Transaction {
   description?: string;
   isRecurring?: boolean;
   repeatInterval?: string;
-  updatedAt: number;               // ✅ made required
+  // NEW: EMI Tracking fields
+  loanAccountId?: string;       // Links this payment to a specific loan account
+  installmentNumber?: number;   // Which EMI number this was (e.g., 1 of 12)
+  updatedAt: number;
 }
 
 class KanjoosDatabase extends Dexie {
@@ -90,6 +98,14 @@ class KanjoosDatabase extends Dexie {
         delete cat.parentCategoryId;
       });
     });
+
+    // v3: Added indexes to support querying upcoming loan EMIs and tracking 
+    // which loan account a transaction belongs to.
+    this.version(3).stores({
+      accounts: 'id, type, dueDate, tenureMonths',
+      categories: 'id, type, parentId',
+      transactions: 'id, date, accountId, toAccountId, categoryId, loanAccountId, isRecurring, [type+date], [categoryId+date], [accountId+date], [toAccountId+date], [loanAccountId+date]'
+    });
   }
 
   async seedDefaultCategories(): Promise<void> {
@@ -117,6 +133,7 @@ class KanjoosDatabase extends Dexie {
       { id: 'cat-entertainment', name: 'Entertainment & OTT', type: 'expense', icon: 'film', color: '#A855F7', updatedAt: now },
       { id: 'cat-netflix', name: 'Netflix', type: 'expense', parentId: 'cat-entertainment', color: '#E50914', icon: 'tv', updatedAt: now },
       { id: 'cat-medical', name: 'Medical & Healthcare', type: 'expense', icon: 'activity', color: '#06B6D4', updatedAt: now },
+      { id: 'cat-loan-interest', name: 'Loan Interest & GST', type: 'expense', icon: 'percent', color: '#F43F5E', updatedAt: now }, // NEW: Useful for EMI expenses
       { id: 'cat-expense-other', name: 'Miscellaneous', type: 'expense', icon: 'more-horizontal', color: '#9CA3AF', updatedAt: now }
     ];
 

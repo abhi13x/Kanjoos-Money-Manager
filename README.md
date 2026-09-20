@@ -27,18 +27,19 @@ A privacy-focused, client-side personal finance manager built with React, TypeSc
 money-manager/
 ├── public/              # Static assets
 ├── src/
-│   ├── assets/          # Images and static assets
-│   ├── components/      # UI Components (Tabs, Modals, Dashboard)
+│   ├── assets/           # Images and static icons
+│   ├── components/     # UI Components (Tabs, Modals, Dashboard)
 │   │   ├── AccountsTab/        # Account management view & logic
 │   │   ├── CategoriesTab/      # Category management view & logic
 │   │   ├── StatsTab/           # Financial statistics and charts
+│   │   ├── TransactionTab/    # Transaction history and management
 │   │   ├── TransactionModal/   # Add/Edit transaction dialog
-│   │   ├── TransactionTab/     # Transaction history and management
 │   │   ├── Dashboard.tsx       # Main overview and summary
-│   │   ├── DriveSyncSettings.tsx # Google Drive sync configuration
+│   │   ├── DriveSyncSettings.tsx # Sync configuration settings
 │   │   ├── SettingsTab.tsx     # App settings
 │   │   ├── SummaryTab.tsx      # Transaction summaries
 │   │   ├── TabMenu.tsx         # Navigation between views
+│   │   └── IosSafeAreaLayoutContainer.tsx # Layout wrapper for iOS devices
 │   │   └── IosSafeAreaLayoutContainer.tsx # Layout wrapper for iOS devices
 │   ├── db/
 │   │   └── schema.ts            # Dexie database definition and seeding
@@ -46,24 +47,22 @@ money-manager/
 │   │   ├── useGDriveSession.ts  # Google Drive auth session management
 │   │   ├── useSettings.ts      # User preference management
 │   │   ├── useUserSummary.ts    # Aggregated financial data hooks
-│   │   └── useWindowSize.ts    # Responsive design hook
-│   ├── services/
+│   │   ├── useGDriveSession.ts  # Google Drive session management
+│   │   └── useWindowSize.ts     # Window dimension tracking
+│   ├── services/              # Business logic and external API integrations
 │   │   ├── financeService.ts    # Business logic for transactions and balances
 │   │   ├── gdriveSync.ts       # Google Drive API integration for backups
-│   │   ├── investmentFormulas.ts # Financial calculations for investments
-│   │   ├── investmentService.ts # Investment-specific business logic
-│   │   ├── themeService.ts      # UI Theme management
-│   │   └── gdrive/              # Detailed GDrive implementation utilities
-│   │       ├── backupValidation.ts
-│   │       ├── driveApiClient.ts
-│   │       ├── gdriveTypes.ts
-│   │       ├── mergeEntities.ts
-│   │       └── tombstoneStore.ts
+│   │   ├── investmentFormulas.ts # Investment calculation logic
+│   │   ├── investmentService.ts # Investment tracking and calculations
+│   │   ├── themeService.ts      # Theme management logic
+│   │   └── gdrive/             # Detailed Google Drive API utilities
+│   ├── theme/                  # Custom theme definitions
+│   │   └── glass.tsx            # Glassmorphism theme implementation
 │   ├── types/
 │   │   ├── finance.ts           # Domain types and currency utilities
 │   │   └── google.d.ts          # TypeScript definitions for Google API
 │   ├── App.tsx                 # Main application entry point
-│   ├── AppInitializer.tsx      # App bootstrap and initialization logic
+│   ├── AppInitializer.tsx      # App bootstrapper and initialization
 │   └── main.tsx                # React DOM rendering
 ├── package.json                # Dependencies and scripts
 ├── tsconfig.json               # TypeScript configuration

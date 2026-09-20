@@ -211,6 +211,7 @@ export const AccountFormDrawer: React.FC<AccountFormDrawerProps> = ({
           />
         </IOSField>
 
+        
         <IOSField label="ACCOUNT TYPE">
           <Select
             value={type}
@@ -223,6 +224,9 @@ export const AccountFormDrawer: React.FC<AccountFormDrawerProps> = ({
             <MenuItem value="wallet">Wallet</MenuItem>
             <MenuItem value="credit_card">Credit Card</MenuItem>
             <MenuItem value="debit_card">Debit Card</MenuItem>
+            {/* ✅ ADDED LOAN & MORTGAGE */}
+            <MenuItem value="loan">Loan</MenuItem>
+            <MenuItem value="mortgage">Mortgage</MenuItem>
             <MenuItem value="mutual_fund">Mutual Fund</MenuItem>
             <MenuItem value="stock">Stocks</MenuItem>
             <MenuItem value="fd_rd">Fixed Deposit / RD</MenuItem>
@@ -259,7 +263,8 @@ export const AccountFormDrawer: React.FC<AccountFormDrawerProps> = ({
           />
         </IOSField>
 
-        {['mutual_fund', 'stock', 'fd_rd', 'scheme'].includes(type) && (
+       {/* ✅ UPDATED: Added 'loan', 'mortgage' to the array so these fields render */}
+        {['mutual_fund', 'stock', 'fd_rd', 'scheme', 'loan', 'mortgage'].includes(type) && (
           <>
             <IOSField
               label={
@@ -292,7 +297,7 @@ export const AccountFormDrawer: React.FC<AccountFormDrawerProps> = ({
               />
             </IOSField>
 
-            <IOSField label="START DATE">
+            <IOSField label={type === 'loan' || type === 'mortgage' ? 'FIRST EMI DATE' : 'START DATE'}>
               <InputBase
                 type="date"
                 value={startDate}

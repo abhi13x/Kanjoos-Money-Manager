@@ -41,9 +41,13 @@ export class GDriveSyncService {
       expiryKey: 'kanjoos_gdrive_expiry',
       connectedKey: 'kanjoos_gdrive_connected',
       scopes: 'https://www.googleapis.com/auth/drive.appdata',
-      onAuthenticated: (token) => {
-        this.startAutoSync();
-        this.ensureAppFolders(token).catch((err) =>
+      // FIX: Strictly typed token and err to prevent implicit any errors
+      onAuthenticated: (token: string) => {
+        // FIX: Guard against resetting the timer on every silent token renewal
+        if (!this.syncTimer) {
+          this.startAutoSync();
+        }
+        this.ensureAppFolders(token).catch((err: unknown) =>
           console.warn('Background folder creation failed:', err)
         );
       },
@@ -52,7 +56,7 @@ export class GDriveSyncService {
     this.tombstones = new GDriveTombstoneStore('kanjoos_gdrive_deleted_ids');
 
     this.driveApi = new DriveApiClient({
-      resolveToken: (token) => this.tokenAuth.ensureValidToken(token),
+      resolveToken: (token?: string | null) => this.tokenAuth.ensureValidToken(token),
       onUnauthorized: async () => {
         // Attempt only silent token renewal during automated API calls
         const renewed = await this.tokenAuth.getValidToken(false);
@@ -84,6 +88,15 @@ export class GDriveSyncService {
 
     if (config.lastSyncKey) this.lastSyncKey = config.lastSyncKey;
     if (config.defaultFolders) this.defaultFolders = config.defaultFolders;
+
+    if (config.autoSyncIntervalMs !== undefined) {
+      this.autoSyncIntervalMs = config.autoSyncIntervalMs;
+      // Restart timer if it's currently running to apply new interval
+      if (this.syncTimer) {
+        this.startAutoSync();
+      }
+    }
+
     if (config.maxBackupsToKeep !== undefined) this.maxBackupsToKeep = config.maxBackupsToKeep;
     if (config.conflictStrategy) this.conflictStrategy = config.conflictStrategy;
 
@@ -149,16 +162,15 @@ export class GDriveSyncService {
 
     this.syncTimer = setInterval(() => {
       if (this.hasStoredCredentials()) {
-        this.sync().catch((err) => console.warn('Background auto-sync failed:', err));
+        this.sync().catch((err: unknown) => console.warn('Background auto-sync failed:', err));
       }
     }, this.autoSyncIntervalMs);
 
     window.addEventListener('online', this.handleEventSync);
     document.addEventListener('visibilitychange', this.handleVisibilitySync);
 
-    // Immediate sync on startup if credentials exist
-    if (this.hasStoredCredentials()) {
-      this.sync().catch((err) => console.warn('Startup auto-sync failed:', err));
+    if (this.hasStoredCredentials() && !this.hasValidAccessToken()) {
+      this.sync().catch((err: unknown) => console.warn('Startup auto-sync failed:', err));
     }
   }
 
@@ -173,7 +185,7 @@ export class GDriveSyncService {
 
   private handleEventSync = () => {
     if (this.hasStoredCredentials()) {
-      this.sync().catch((err) => console.warn('Event auto-sync failed:', err));
+      this.sync().catch((err: unknown) => console.warn('Event auto-sync failed:', err));
     }
   };
 
@@ -356,7 +368,13 @@ export class GDriveSyncService {
       }
 
       await this.driveApi.pruneOldBackups(activeToken, backupFolderId, this.maxBackupsToKeep);
-      localStorage.setItem(this.lastSyncKey, Date.now().toString());
+
+      // FIX: Safe localStorage write
+      try {
+        localStorage.setItem(this.lastSyncKey, Date.now().toString());
+      } catch (e) {
+        console.warn('Failed to save last sync timestamp locally:', e);
+      }
     } catch (err: unknown) {
       this.lastError = err instanceof Error ? err.message : 'Synchronization failed.';
       throw err;

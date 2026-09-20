@@ -2,7 +2,12 @@ import React from 'react';
 import { TextField, InputAdornment } from '@mui/material';
 import { Calendar } from 'lucide-react';
 
-export const DatePicker: React.FC<{ date, setDate }> = ({ date, setDate }) => {
+interface DatePickerProps {
+  date: string;
+  setDate: (date: string) => void;
+}
+
+export const DatePicker: React.FC<DatePickerProps> = ({ date, setDate }) => {
   return (
     <TextField
       type="date"
@@ -15,14 +20,15 @@ export const DatePicker: React.FC<{ date, setDate }> = ({ date, setDate }) => {
         inputLabel: { shrink: true },
         input: {
           startAdornment: (
-          <InputAdornment position="start">
-            <Calendar size={18} />
+            <InputAdornment position="start">
+              <Calendar size={18} aria-hidden />
             </InputAdornment>
-            ),
+          ),
           sx: { borderRadius: '14px' }
         }
       }}
     />
-  )
+  );
+};
 
-}
+export default DatePicker;

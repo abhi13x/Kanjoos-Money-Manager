@@ -3,6 +3,8 @@ import { Box, Grid, Card, CardContent, Typography, List, ListItem, ListItemText,
 import { TrendingUp, TrendingDown, Wallet, PiggyBank, Calendar, CreditCard as CardIcon, LineChart } from 'lucide-react';
 import type { Account, Transaction } from '@/db/schema';
 import { getInvestmentSummaries, getTotalProjectedInterest, getTotalProjectedMaturity } from '@/services/investmentService';
+// ✅ ADDED: Import EMI calculator
+import { calculateEMIForAccount } from '@/services/financeService'; 
 
 interface SummaryTabProps {
   accounts?: Account[];
@@ -68,9 +70,10 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
     return creditCards.reduce((sum, acc) => sum + Math.abs(acc.currentBalance ?? 0), 0);
   }, [creditCards]);
 
-  const upcomingPayments = useMemo(() => {
+   const upcomingPayments = useMemo(() => {
     const today = new Date().getDate();
-    const scheduledTypes = ['mutual_fund', 'stock', 'fd_rd', 'scheme', 'credit_card'];
+    // ✅ ADDED: 'loan', 'mortgage' to scheduled types
+    const scheduledTypes = ['mutual_fund', 'stock', 'fd_rd', 'scheme', 'credit_card', 'loan', 'mortgage'];
 
     return accounts
       .filter((acc) => acc?.type && scheduledTypes.includes(acc.type))
@@ -78,15 +81,25 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
         const dueDay = acc.repeatInvestmentDate ?? acc.dueDate ?? 5;
         const status = dueDay >= today ? 'Upcoming' : 'Overdue';
 
+        // ✅ ADDED: Calculate EMI amount if it's a loan
+        let amount = 0;
+        if (acc.type === 'credit_card') {
+          amount = acc.currentBalance ?? 0;
+        } else if (acc.type === 'loan' || acc.type === 'mortgage') {
+          try {
+            amount = calculateEMIForAccount(acc).emi; 
+          } catch { amount = 0; }
+        } else {
+          amount = acc.monthlyInvestment ?? 0;
+        }
+
         return {
           id: acc.id,
           name: acc.name ?? 'Unnamed Account',
           type: acc.type,
           dueDay,
           status,
-          amount: acc.type === 'credit_card'
-            ? (acc.currentBalance ?? 0)
-            : (acc.monthlyInvestment ?? 0),
+          amount,
         };
       })
       .sort((a, b) => a.dueDay - b.dueDay);
