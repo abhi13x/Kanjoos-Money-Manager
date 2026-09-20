@@ -6,7 +6,9 @@ import { mergeEntities, areEntityListsEqual, areIdListsEqual } from '@/services/
 import { sanitizeEntityList, sanitizeIdList } from '@/services/gdrive/backupValidation';
 import type {
   ConflictResolutionStrategy,
-  GDriveSyncConfig, SyncStatus,
+  GDriveSyncConfig,
+  SyncStatus,
+  SyncState,
   GDriveFile
 } from '@/services/gdrive/gdriveTypes';
 
@@ -56,17 +58,10 @@ export class GDriveSyncService {
     this.driveApi = new DriveApiClient({
       resolveToken: (token?: string | null) => this.tokenAuth.ensureValidToken(token),
       onUnauthorized: async () => {
-        // Step 1: Try silent token renewal first
+        // Attempt only silent token renewal during automated API calls
         const renewed = await this.tokenAuth.getValidToken(false);
-
         if (!renewed) {
-          // Step 2: Try interactive renewal (user may need to re-consent)
-          const interactive = await this.tokenAuth.getValidToken(true);
-
-          if (!interactive) {
-            // Step 3: Only clear session if ALL renewal attempts fail
-            this.clearSession();
-          }
+          this.clearSession();
         }
       },
     });
@@ -104,6 +99,13 @@ export class GDriveSyncService {
 
     if (config.maxBackupsToKeep !== undefined) this.maxBackupsToKeep = config.maxBackupsToKeep;
     if (config.conflictStrategy) this.conflictStrategy = config.conflictStrategy;
+
+    if (config.autoSyncIntervalMs !== undefined) {
+      this.autoSyncIntervalMs = config.autoSyncIntervalMs;
+      if (this.syncTimer) {
+        this.startAutoSync(this.autoSyncIntervalMs);
+      }
+    }
   }
 
   // ─── Tombstone Management ──────────────────────────────────
@@ -121,9 +123,19 @@ export class GDriveSyncService {
     try {
       rawTime = localStorage.getItem(this.lastSyncKey);
     } catch {
-      // Fall through with lastSyncTime unknown rather than throwing on every render
+      // Fall through with lastSyncTime unknown
     }
+
+    const state: SyncState = this.isSyncing
+      ? 'syncing'
+      : this.lastError
+        ? 'error'
+        : rawTime
+          ? 'success'
+          : 'idle';
+
     return {
+      state,
       lastSyncTime: rawTime ? Number(rawTime) : null,
       isSyncing: this.isSyncing,
       error: this.lastError,
@@ -294,7 +306,6 @@ export class GDriveSyncService {
       } else if (this.conflictStrategy === 'remote-wins') {
         await this.importBackupFromDrive(activeToken, latestRemoteFile.name);
       } else {
-        // Merge strategy
         const remoteData = await this.readFile<{
           accounts?: unknown;
           transactions?: unknown;
@@ -312,6 +323,7 @@ export class GDriveSyncService {
         const remoteAccounts = sanitizeEntityList<Account>(remoteData.accounts);
         const remoteTransactions = sanitizeEntityList<Transaction>(remoteData.transactions);
         const remoteCategories = sanitizeEntityList<Category>(remoteData.categories);
+
         const mergedAccounts = mergeEntities(localAccounts, remoteAccounts, deletedIds);
         const mergedTransactions = mergeEntities(localTransactions, remoteTransactions, deletedIds);
         const mergedCategories = mergeEntities(localCategories, remoteCategories, deletedIds);
@@ -434,6 +446,8 @@ export class GDriveSyncService {
 
 // ─── Exported Helpers ─────────────────────────────────────────
 
-export const recordDeletedTransactionId = (id: string): void => {
+export const recordDeletedEntityId = (id: string): void => {
   GDriveSyncService.getInstance().markAsDeleted(id);
 };
+
+export const recordDeletedTransactionId = recordDeletedEntityId;

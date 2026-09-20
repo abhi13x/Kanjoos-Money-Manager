@@ -7,13 +7,13 @@ export interface DriveApiClientConfig {
   /** Resolves (and if necessary, silently renews) an access token, throwing if unavailable. */
   resolveToken: (token?: string | null) => Promise<string>;
   /** Called when the Drive API reports the current token is invalid/expired. */
-  onUnauthorized: () => void;
+  onUnauthorized: () => Promise<void> | void;
 }
 
 /** Thin, stateless wrapper around the Google Drive REST API (appDataFolder scope). */
 export class DriveApiClient {
   private resolveToken: (token?: string | null) => Promise<string>;
-  private onUnauthorized: () => void;
+  private onUnauthorized: () => Promise<void> | void;
 
   constructor(config: DriveApiClientConfig) {
     this.resolveToken = config.resolveToken;
@@ -38,16 +38,22 @@ export class DriveApiClient {
     });
 
     if (response.status === 401) {
-      // Clear invalid token
-      this.onUnauthorized();
+      await this.onUnauthorized();
       throw new Error('Authentication failed or token expired. Please reconnect.');
     }
 
-    if (response.status === 403) {
-      const errorData = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-      throw new Error(
-        `Google API Forbidden: ${errorData.error?.message || 'Check Drive API configuration'}`
-      );
+    if (response.status === 403 || response.status === 429) {
+      const errorData = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string; errors?: Array<{ reason?: string }> };
+      };
+      const reason = errorData.error?.errors?.[0]?.reason || '';
+      const message = errorData.error?.message || response.statusText;
+
+      if (reason.includes('rateLimit') || reason.includes('quota') || response.status === 429) {
+        throw new Error(`Google Drive rate limit exceeded: ${message}`);
+      }
+
+      throw new Error(`Google API Forbidden (403): ${message}`);
     }
 
     if (!response.ok) {
@@ -61,20 +67,20 @@ export class DriveApiClient {
     return response.json() as Promise<T>;
   }
 
-  /** Generates a sortable, timestamped backup file name, e.g. `BKP_020926_120000_000.json`. */
+  /** Generates a lexicographically sortable timestamped backup file name (e.g., `BKP_20260912_120000_000.json`). */
   generateBackupFileName(): string {
     const now = new Date();
     const pad = (num: number, len = 2) => String(num).padStart(len, '0');
 
-    const DD = pad(now.getDate());
+    const YYYY = now.getFullYear();
     const MM = pad(now.getMonth() + 1);
-    const YY = String(now.getFullYear()).slice(-2);
+    const DD = pad(now.getDate());
     const HH = pad(now.getHours());
     const mm = pad(now.getMinutes());
     const ss = pad(now.getSeconds());
     const fff = pad(now.getMilliseconds(), 3);
 
-    return `BKP_${DD}${MM}${YY}_${HH}${mm}${ss}_${fff}.json`;
+    return `BKP_${YYYY}${MM}${DD}_${HH}${mm}${ss}_${fff}.json`;
   }
 
   async getOrCreateFolder(token: string | null, folderName: string): Promise<string> {
@@ -115,9 +121,14 @@ export class DriveApiClient {
     folderNames: string[]
   ): Promise<Record<string, string>> {
     const activeToken = await this.resolveToken(token);
-    const folderEntries = await Promise.all(
-      folderNames.map(async (name) => [name, await this.getOrCreateFolder(activeToken, name)])
-    );
+    const folderEntries: Array<[string, string]> = [];
+
+    // Process sequentially to prevent concurrent duplicate folder creation
+    for (const name of folderNames) {
+      const folderId = await this.getOrCreateFolder(activeToken, name);
+      folderEntries.push([name, folderId]);
+    }
+
     return Object.fromEntries(folderEntries);
   }
 
@@ -134,13 +145,15 @@ export class DriveApiClient {
     const files = result.files || [];
     if (files.length > maxBackupsToKeep) {
       const filesToDelete = files.slice(maxBackupsToKeep);
-      await Promise.all(
-        filesToDelete.map((file) =>
-          this.driveFetch(`${DRIVE_API_BASE}/files/${file.id}`, token, { method: 'DELETE' }).catch(
-            (err) => console.warn(`Failed to prune backup file ${file.id}:`, err)
-          )
-        )
-      );
+
+      // Delete sequentially to prevent HTTP 429 / 403 Rate Limit errors
+      for (const file of filesToDelete) {
+        try {
+          await this.driveFetch(`${DRIVE_API_BASE}/files/${file.id}`, token, { method: 'DELETE' });
+        } catch (err) {
+          console.warn(`Failed to prune backup file ${file.id}:`, err);
+        }
+      }
     }
   }
 
@@ -186,7 +199,11 @@ export class DriveApiClient {
     fileName: string,
     parentFolderId = 'appDataFolder'
   ): Promise<GDriveFile> {
-    const metadata = { name: fileName, parents: [parentFolderId] };
+    const metadata = {
+      name: fileName,
+      parents: [parentFolderId],
+      mimeType: 'application/json',
+    };
     const form = new FormData();
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     form.append('file', contentBlob);
