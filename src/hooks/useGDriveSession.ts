@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { GDriveSyncService } from '@/services/gdriveSync';
+import type { GDriveSyncConfig, SyncStatus } from '@/services/gdrive/gdriveTypes';
 
 export interface UseGDriveSessionReturn {
   isConnected: boolean;
@@ -121,12 +122,23 @@ const getServerSnapshot = (): GDriveStoreState => SERVER_SNAPSHOT;
 export const useGDriveSession = (): UseGDriveSessionReturn => {
   const storeState = useSyncExternalStore(subscribe, getStoreSnapshot, getServerSnapshot);
 
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(syncService.getStatus());
   const [isPending, setIsPending] = useState<boolean>(false);
-  const pendingCountRef = useRef(0);
+  const [isConnected, setIsConnected] = useState<boolean>(syncService.hasStoredCredentials());
+  const [error, setError] = useState<string | null>(null);
 
-  const withPending = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
-    pendingCountRef.current += 1;
+  // Subscribe to sync service state updates
+  useEffect(() => {
+    const unsubscribe = syncService.subscribe((status) => {
+      setSyncStatus(status);
+      setIsConnected(syncService.hasStoredCredentials());
+    });
+    return () => unsubscribe();
+  }, [syncService]);
+
+  const ensureAuthenticated = useCallback(async () => {
     setIsPending(true);
+    setError(null);
     try {
       return await fn();
     } finally {
@@ -145,11 +157,14 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
     throw error;
   }, []);
 
-  // ─── Public methods ──────────────────────────────────────────
+      // 2. If no valid token exists, trigger interactive login popup
+      if (!token) {
+        token = await syncService.authenticate();
+      }
 
-  const ensureAuthenticated = useCallback(async (): Promise<string> => {
-    return withPending(() => getOrAcquireToken());
-  }, [getOrAcquireToken, withPending]);
+      if (!token) {
+        throw new Error('User is not authenticated with Google Drive.');
+      }
 
   const login = useCallback(async (): Promise<string> => {
     return withPending(async () => {
@@ -165,8 +180,9 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
 
   const disconnect = useCallback(() => {
     syncService.clearSession();
-    notifySessionChange();
-  }, []);
+    setIsConnected(false);
+    setError(null);
+  }, [syncService]);
 
   const sync = useCallback(async (): Promise<void> => {
     return withPending(async () => {
@@ -208,13 +224,17 @@ export const useGDriveSession = (): UseGDriveSessionReturn => {
   );
 
   return {
-    ...storeState,
+    isConnected,
+    isSyncing: syncStatus.isSyncing,
     isPending,
+    lastSyncTime: syncStatus.lastSyncTime,
+    error: error || syncStatus.error,
     ensureAuthenticated,
-    login,
     disconnect,
     sync,
     exportBackup,
     importBackup,
   };
-};
+}
+
+export default useGDriveSession;
